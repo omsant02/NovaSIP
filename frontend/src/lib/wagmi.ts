@@ -1,9 +1,12 @@
 import { createConfig, http, injected } from "wagmi";
-import { hyperEvmTestnet } from "@/lib/chains";
+import { hyperEvmTestnet, robinhoodTestnet } from "@/lib/chains";
 
 export const wagmiConfig = createConfig({
-  chains: [hyperEvmTestnet],
+  chains: [hyperEvmTestnet, robinhoodTestnet],
   connectors: [injected()],
-  transports: { [hyperEvmTestnet.id]: http() },
+  transports: {
+    [hyperEvmTestnet.id]: http(),
+    [robinhoodTestnet.id]: http(),
+  },
   ssr: true,
 });

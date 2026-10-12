@@ -1,4 +1,5 @@
 import { API_URL, type Tier } from "@/lib/api";
+import type { StockSymbol } from "@/lib/contracts";
 
 export type ChatMessage = { role: "user" | "assistant"; text: string };
 
@@ -6,6 +7,15 @@ export type ChatAction =
   | {
       type: "deposit";
       amountUsd: number;
+      tier: Tier;
+      goalName: string;
+      targetUsd: number;
+      goalMonth: string;
+    }
+  | {
+      type: "deposit_stock";
+      symbol: StockSymbol;
+      amount: number;
       tier: Tier;
       goalName: string;
       targetUsd: number;

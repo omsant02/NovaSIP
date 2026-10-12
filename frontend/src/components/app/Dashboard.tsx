@@ -3,17 +3,20 @@
 import { useAccount } from "wagmi";
 import { useNovaState } from "@/lib/useNovaState";
 import { usePerformance } from "@/lib/usePerformance";
+import { useRobinhood } from "@/lib/useRobinhood";
 import { estimatePnl } from "@/lib/pnl";
 import { fromUsdc } from "@/lib/api";
 import { AllocationCard } from "@/components/app/AllocationCard";
 import { ConnectButton } from "@/components/app/ConnectButton";
 import { EmptyState } from "@/components/app/EmptyState";
 import { GoalCard } from "@/components/app/GoalCard";
+import { RobinhoodCard } from "@/components/app/RobinhoodCard";
 
 export function Dashboard() {
   const { isConnected, status } = useAccount();
   const { data, error, isLoading } = useNovaState();
   const { data: perf } = usePerformance();
+  const { data: rh, isLoading: rhLoading } = useRobinhood();
 
   if (status === "connecting" || status === "reconnecting") {
     return <p className="text-muted">Checking your wallet...</p>;
@@ -30,7 +33,7 @@ export function Dashboard() {
     );
   }
 
-  if (isLoading) {
+  if (isLoading || rhLoading) {
     return <p className="text-muted">Loading your portfolio...</p>;
   }
 
@@ -42,8 +45,8 @@ export function Dashboard() {
     );
   }
 
-  const total =
-    fromUsdc(data.hub.hubPrincipal) + fromUsdc(data.hub.rhPrincipal);
+  // USDC on Hyperliquid's side plus the live dollar value of stock tokens.
+  const total = fromUsdc(data.hub.hubPrincipal) + (rh?.totalUsd ?? 0);
 
   if (total === 0) {
     return (
@@ -54,17 +57,29 @@ export function Dashboard() {
     );
   }
 
-  const pnl = estimatePnl(data.book.allocation, total, perf);
+  // The stock slices come from live on-chain data, not the last saved run.
+  const pct = (usd: number) => Math.round((usd / total) * 1000) / 10;
+  const allocation =
+    rh && rh.totalUsd > 0
+      ? {
+          ...data.book.allocation,
+          stocks: pct(rh.heldUsd),
+          robinhood: pct(rh.rotatedUsd),
+        }
+      : data.book.allocation;
+
+  const pnl = estimatePnl(allocation, total, perf, rh);
 
   return (
     <div className="grid content-start gap-6">
       <GoalCard profile={data.profile} total={total} pnl={pnl.total} />
       <AllocationCard
-        stockApy={perf?.stockYield.supplyApyPct}
-        allocation={data.book.allocation}
+        stockApy={perf?.stockYield.supplyApyPct ?? rh?.morphoApyPct}
+        allocation={allocation}
         total={total}
         pnl={pnl.byStrategy}
       />
+      {rh && rh.totalUsd > 0 && <RobinhoodCard status={rh} />}
     </div>
   );
 }

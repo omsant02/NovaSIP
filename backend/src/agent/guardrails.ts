@@ -22,7 +22,12 @@ export const STRATEGIES: Strategy[] = [
 ];
 
 // Strategies that live on Hyperliquid (hub USDC) and on Robinhood Chain (stock tokens).
-export const HL_STRATEGIES: Strategy[] = ["carry", "lending", "hlp", "directional"];
+export const HL_STRATEGIES: Strategy[] = [
+  "carry",
+  "lending",
+  "hlp",
+  "directional",
+];
 export const RH_STRATEGIES: Strategy[] = ["stocks", "robinhood"];
 
 // Max percent of the portfolio per strategy, per risk tier.
@@ -80,6 +85,8 @@ export function isAllowedAction(name: string): name is Action {
 export type Verdict = { approved: boolean; reasons: string[] };
 
 const EPS = 0.01;
+// The stock slices are rounded to 0.1% each, so the chain-share and total checks need a little slack.
+const CHAIN_SHARE_TOLERANCE_PCT = 0.5;
 
 export type ProposalOpts = {
   initial?: boolean;
@@ -113,7 +120,7 @@ export function checkProposal(
     moved += Math.max(0, t - (current[s] ?? 0));
   }
 
-  if (total > 100 + EPS)
+  if (total > 100 + CHAIN_SHARE_TOLERANCE_PCT)
     reasons.push(`total allocation ${total.toFixed(2)}% exceeds 100%`);
   if (!opts.initial && moved > MAX_CHANGE_PER_CYCLE_PCT + EPS) {
     reasons.push(
@@ -127,14 +134,14 @@ export function checkProposal(
   // Funds can only be used on the chain they were deposited on.
   if (opts.rhSharePct !== undefined) {
     const rh = RH_STRATEGIES.reduce((a, s) => a + (target[s] || 0), 0);
-    if (rh > opts.rhSharePct + EPS)
+    if (rh > opts.rhSharePct + CHAIN_SHARE_TOLERANCE_PCT)
       reasons.push(
         `stocks + robinhood: ${rh.toFixed(2)}% exceeds the ${opts.rhSharePct.toFixed(2)}% of funds deposited on Robinhood Chain`,
       );
   }
   if (opts.hubSharePct !== undefined) {
     const hl = HL_STRATEGIES.reduce((a, s) => a + (target[s] || 0), 0);
-    if (hl > opts.hubSharePct + EPS)
+    if (hl > opts.hubSharePct + CHAIN_SHARE_TOLERANCE_PCT)
       reasons.push(
         `Hyperliquid strategies: ${hl.toFixed(2)}% exceeds the ${opts.hubSharePct.toFixed(2)}% of funds deposited on Hyperliquid`,
       );

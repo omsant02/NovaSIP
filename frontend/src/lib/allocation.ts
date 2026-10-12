@@ -5,15 +5,17 @@ export const STRATEGY_ORDER: StrategyKey[] = [
   "lending",
   "hlp",
   "directional",
+  "stocks",
   "robinhood",
 ];
 
 export const STRATEGY_LABEL: Record<StrategyKey, string> = {
-  carry: "ETH carry",
+  carry: "Delta-neutral carry",
   lending: "USDC lending",
   hlp: "HLP vault",
   directional: "Directional",
-  robinhood: "Robinhood stocks",
+  stocks: "Stock tokens (held)",
+  robinhood: "Stocks in USDG on Morpho",
 };
 
 export const STRATEGY_COLOR: Record<StrategyKey, string> = {
@@ -21,16 +23,8 @@ export const STRATEGY_COLOR: Record<StrategyKey, string> = {
   lending: "#34CBB8",
   hlp: "#1FA896",
   directional: "#7DE8D8",
+  stocks: "#F2C879",
   robinhood: "#93A5FF",
-};
-
-/** live = real transactions on testnet, preview = simulated */
-export const STRATEGY_LIVE: Record<StrategyKey, boolean> = {
-  carry: true,
-  lending: true,
-  hlp: true,
-  directional: false,
-  robinhood: false,
 };
 
 export function money(n: number): string {

@@ -30,22 +30,27 @@ export function useChat() {
     setMessages(store.current);
   }, []);
 
-  const refresh = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: ["nova-state"] }),
-    [queryClient],
-  );
+  const refresh = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["nova-state"] });
+    queryClient.invalidateQueries({ queryKey: ["rh-status"] });
+  }, [queryClient]);
 
   // live status while the wallet popups are open
   useEffect(() => {
+    if (deposit.step === "switching")
+      push({
+        role: "assistant",
+        text: "Switch the network in your wallet to continue...",
+      });
     if (deposit.step === "approving")
       push({
         role: "assistant",
-        text: "Approve the USDC spend in your wallet...",
+        text: "Approve the spend in your wallet...",
       });
     if (deposit.step === "depositing")
       push({
         role: "assistant",
-        text: "Now confirm the deposit in your wallet.",
+        text: "Now confirm the transaction in your wallet.",
       });
     if (deposit.step === "error" && deposit.error)
       push({ role: "assistant", text: `Wallet error: ${deposit.error}` });
@@ -62,9 +67,12 @@ export function useChat() {
         tier: a.tier,
       });
       refresh();
-      if (a.type !== "deposit") continue;
+      if (a.type === "update_goal") continue;
 
-      const ok = await deposit.run(a.amountUsd, a.tier);
+      const ok =
+        a.type === "deposit"
+          ? await deposit.run(a.amountUsd, a.tier)
+          : await deposit.runStock(a.symbol, a.amount, a.tier);
       refresh();
       if (!ok) {
         push({

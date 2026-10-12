@@ -530,7 +530,17 @@ async function proposeAllocation(args: Record<string, unknown>) {
       reasoning,
       actions: [],
     });
-    return { approved: false, reasons: verdict.reasons };
+        return {
+      approved: false,
+      reasons: verdict.reasons,
+      limits: {
+        hyperliquidSharePct: funds.split ? round1(funds.split.hubSharePct) : null,
+        robinhoodSharePct: funds.split ? round1(funds.split.rhSharePct) : null,
+        caps: CAPS[book.tier],
+        maxChangePerCyclePct: MAX_CHANGE_PER_CYCLE_PCT,
+      },
+      note: "stocks and robinhood are computed from your rotate map. Fix the Hyperliquid percentages or the rotate map, then propose again.",
+    };
   }
 
   const rhUsd = funds.split?.rhUsd ?? 0;

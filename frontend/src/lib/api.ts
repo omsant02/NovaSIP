@@ -6,6 +6,7 @@ export type StrategyKey =
   | "lending"
   | "hlp"
   | "directional"
+  | "stocks"
   | "robinhood";
 
 export type Allocation = Record<StrategyKey, number>;
@@ -118,5 +119,38 @@ export type Performance = {
 export async function fetchPerformance(): Promise<Performance> {
   const res = await fetch(`${API_URL}/api/performance`);
   if (!res.ok) throw new Error(`Performance request failed (${res.status})`);
+  return res.json();
+}
+
+
+export type RhToken = {
+  symbol: string;
+  token: string;
+  units: number;
+  priceUsd: number | null;
+  valueUsd: number;
+  heldUsd: number;
+  rotatedUsd: number;
+  usdgIdle: number;
+  morphoUsd: number;
+  yieldClaimable: number;
+  yieldClaimableUsd: number;
+  pendingGainUnits: number;
+};
+
+export type RhStatus = {
+  totalUsd: number;
+  heldUsd: number;
+  rotatedUsd: number;
+  morphoUsd: number;
+  claimableUsd: number;
+  morphoApyPct: number | null;
+  morphoVaults: { name: string; apyPct: number; tvlUsd: number }[];
+  tokens: RhToken[];
+};
+
+export async function fetchRobinhood(user: string): Promise<RhStatus> {
+  const res = await fetch(`${API_URL}/api/robinhood?user=${user}`);
+  if (!res.ok) throw new Error(`Robinhood request failed (${res.status})`);
   return res.json();
 }

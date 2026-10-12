@@ -3,37 +3,33 @@ import {
   STRATEGY_ORDER,
   STRATEGY_COLOR,
   STRATEGY_LABEL,
-  STRATEGY_LIVE,
   money,
   signedMoney,
 } from "@/lib/allocation";
 import { Donut } from "@/components/app/Donut";
 
 function PnlCell({
-  live,
   value,
   apy,
 }: {
-  live: boolean;
   value?: number;
   apy?: number | null;
 }) {
-  if (!live)
-    return (
-      <>
-        <span className="text-dim">Simulated</span>
-        {apy != null && (
-          <span className="block text-xs text-periwinkle">
-            {apy.toFixed(1)}% APY
-          </span>
-        )}
-      </>
-    );
-  if (value === undefined) return <span className="text-dim">—</span>;
   return (
-    <span className={value >= 0 ? "text-mint" : "text-danger"}>
-      {signedMoney(value)}
-    </span>
+    <>
+      {value === undefined ? (
+        <span className="text-dim">—</span>
+      ) : (
+        <span className={value >= 0 ? "text-mint" : "text-danger"}>
+          {signedMoney(value)}
+        </span>
+      )}
+      {apy != null && (
+        <span className="block text-xs text-periwinkle">
+          {apy.toFixed(1)}% APY
+        </span>
+      )}
+    </>
   );
 }
 
@@ -72,24 +68,12 @@ export function AllocationCard({
                   className="h-3 w-3 shrink-0 rounded-sm"
                   style={{ background: STRATEGY_COLOR[key] }}
                 />
-                <span className="flex-1">
-                  {STRATEGY_LABEL[key]}
-                  <span
-                    className={`ml-2 rounded-full border px-2 py-0.5 text-xs ${
-                      STRATEGY_LIVE[key]
-                        ? "border-mint/40 text-mint"
-                        : "border-periwinkle/40 text-periwinkle"
-                    }`}
-                  >
-                    {STRATEGY_LIVE[key] ? "Live" : "Preview"}
-                  </span>
-                </span>
+                <span className="flex-1">{STRATEGY_LABEL[key]}</span>
                 <span className="w-12 text-right tabular-nums">
                   {allocation[key]}%
                 </span>
                 <span className="w-20 text-right text-sm tabular-nums">
                   <PnlCell
-                    live={STRATEGY_LIVE[key]}
                     value={pnl[key]}
                     apy={key === "robinhood" ? stockApy : null}
                   />
@@ -114,8 +98,8 @@ export function AllocationCard({
         </div>
       </div>
       <p className="mt-4 text-xs text-dim">
-        Profit / loss is estimated from Nova's live positions on Hyperliquid
-        testnet. Directional and Robinhood are simulated.
+        Profit / loss is estimated from Nova's positions on Hyperliquid and the
+        yield credited from stock rotation on Robinhood Chain.
       </p>
     </section>
   );
