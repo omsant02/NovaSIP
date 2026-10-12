@@ -16,4 +16,4 @@ frontend/.env.local
 
 # General
 .DS_Store
-*.env
+*.envbackend/data/
