@@ -72,3 +72,15 @@ export async function fetchState(user?: string): Promise<NovaState> {
   if (!res.ok) throw new Error(`State request failed (${res.status})`);
   return res.json();
 }
+
+export async function saveProfile(
+  user: string,
+  profile: Pick<Profile, "goalName" | "targetUsd" | "goalDate" | "tier">,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/api/profile?user=${user}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile),
+  });
+  if (!res.ok) throw new Error(`Saving your goal failed (${res.status})`);
+}
