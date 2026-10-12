@@ -108,6 +108,7 @@ export type StrategyPerf = {
 };
 
 export type Performance = {
+  stockYield: { supplyApyPct: number | null };
   carry: StrategyPerf;
   lending: StrategyPerf;
   hlp: StrategyPerf;

@@ -60,6 +60,7 @@ export function Dashboard() {
     <div className="grid content-start gap-6">
       <GoalCard profile={data.profile} total={total} pnl={pnl.total} />
       <AllocationCard
+        stockApy={perf?.stockYield.supplyApyPct}
         allocation={data.book.allocation}
         total={total}
         pnl={pnl.byStrategy}

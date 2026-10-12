@@ -12,6 +12,7 @@ import {
 } from "../agent/state.js";
 import { getHubPosition } from "../chain/vault.js";
 import { getPerformance } from "../hyperliquid/performance.js";
+import { getStockYield } from "../agent/morpho.js";
 
 const PORT = Number(process.env.API_PORT ?? 8787);
 const KEEPER_MIN = Number(process.env.KEEPER_INTERVAL_MIN ?? 60);
@@ -94,7 +95,7 @@ async function getState(user: string) {
 let perfCache: { at: number; data: unknown } | null = null;
 async function performance() {
   if (perfCache && Date.now() - perfCache.at < 30_000) return perfCache.data;
-  const data = await getPerformance();
+    const data = { ...(await getPerformance()), stockYield: await getStockYield() };
   perfCache = { at: Date.now(), data };
   return data;
 }

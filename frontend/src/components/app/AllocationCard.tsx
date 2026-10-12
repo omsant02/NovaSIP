@@ -9,8 +9,26 @@ import {
 } from "@/lib/allocation";
 import { Donut } from "@/components/app/Donut";
 
-function PnlCell({ live, value }: { live: boolean; value?: number }) {
-  if (!live) return <span className="text-dim">Simulated</span>;
+function PnlCell({
+  live,
+  value,
+  apy,
+}: {
+  live: boolean;
+  value?: number;
+  apy?: number | null;
+}) {
+  if (!live)
+    return (
+      <>
+        <span className="text-dim">Simulated</span>
+        {apy != null && (
+          <span className="block text-xs text-periwinkle">
+            {apy.toFixed(1)}% APY
+          </span>
+        )}
+      </>
+    );
   if (value === undefined) return <span className="text-dim">—</span>;
   return (
     <span className={value >= 0 ? "text-mint" : "text-danger"}>
@@ -23,17 +41,21 @@ export function AllocationCard({
   allocation,
   total,
   pnl,
+  stockApy,
 }: {
   allocation: Allocation;
   total: number;
   pnl: Partial<Record<StrategyKey, number>>;
+  stockApy?: number | null;
 }) {
   const invested = STRATEGY_ORDER.reduce((s, k) => s + allocation[k], 0);
   const cashPct = Math.max(0, 100 - invested);
 
   return (
     <section className="rounded-2xl border border-line bg-field p-6">
-      <h2 className="font-display text-xl font-semibold">Where your money is</h2>
+      <h2 className="font-display text-xl font-semibold">
+        Where your money is
+      </h2>
       <div className="mt-6 grid items-center gap-8 md:grid-cols-[240px_1fr]">
         <Donut allocation={allocation} total={total} />
         <div>
@@ -66,7 +88,11 @@ export function AllocationCard({
                   {allocation[key]}%
                 </span>
                 <span className="w-20 text-right text-sm tabular-nums">
-                  <PnlCell live={STRATEGY_LIVE[key]} value={pnl[key]} />
+                  <PnlCell
+                    live={STRATEGY_LIVE[key]}
+                    value={pnl[key]}
+                    apy={key === "robinhood" ? stockApy : null}
+                  />
                 </span>
                 <span className="w-20 text-right tabular-nums text-muted">
                   {money((allocation[key] / 100) * total)}

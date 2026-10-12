@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { GoogleGenAI } from "@google/genai";
 import { executeTool, toolDeclarations } from "./tools.js";
+import { withStockYield } from "./morpho.js";
 
 // Comma-separated keys. Each key should belong to its own AI Studio project (quota is per project).
 const keys = (process.env.GEMINI_API_KEYS ?? "")
@@ -26,7 +27,7 @@ const SYSTEM_PROMPT = `You are NovaSIP's portfolio agent. You manage a user's go
 - lending: HyperCore USDC lending (variable APY, liquid).
 - hlp: Hyperliquidity Provider vault (illiquid, 4-day lockup, so it can only grow, never shrink).
 - directional: only when the range signal says "deep-discount" and the user's tier allows it.
-- robinhood: Robinhood Chain stock-token lending (simulated, uncorrelated to crypto funding).
+- robinhood: Robinhood Chain stock-token lending, simulated at the reference Morpho supply APY that get_market_snapshot returns as stockYield. Compare that rate with lending and carry like any other strategy and cite it in your reasoning. If it is null, keep the current Robinhood share. It is uncorrelated to crypto funding.
 Anything not allocated stays as idle cash.
 get_portfolio also returns the user's goal, your memory notes and your last decisions. Use them: work toward the goal, and do not change the allocation without a concrete reason compared with your last decision.
 
@@ -85,15 +86,20 @@ export async function firstRequest(
   params: Record<string, unknown>,
   timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<{ interaction: any; pin: Pin }> {
-  const models = [PRIMARY_MODEL, ...FALLBACKS.filter((m) => m !== PRIMARY_MODEL)];
+  const models = [
+    PRIMARY_MODEL,
+    ...FALLBACKS.filter((m) => m !== PRIMARY_MODEL),
+  ];
   const all: Array<[number, string]> = [];
-  for (const model of models) for (let k = 0; k < clients.length; k++) all.push([k, model]);
+  for (const model of models)
+    for (let k = 0; k < clients.length; k++) all.push([k, model]);
 
   let pairs = all.filter(([k, m]) => !onCooldown(k, m));
   if (pairs.length === 0) pairs = all; // everything cooling down: try anyway
   pairs.sort(
     (a, b) =>
-      Number(pairId(b[0], b[1]) === lastGood) - Number(pairId(a[0], a[1]) === lastGood),
+      Number(pairId(b[0], b[1]) === lastGood) -
+      Number(pairId(a[0], a[1]) === lastGood),
   );
 
   return new Promise((resolve, reject) => {
@@ -123,7 +129,9 @@ export async function firstRequest(
         .catch((e) => {
           lastError = e;
           markFailed(k, model, e);
-          console.log(`key#${k + 1} ${model} failed: ${errMsg(e).slice(0, 100)}`);
+          console.log(
+            `key#${k + 1} ${model} failed: ${errMsg(e).slice(0, 100)}`,
+          );
           failed++;
           if (done) return;
           if (failed >= pairs.length) {
@@ -197,6 +205,8 @@ export async function runAgentCycle() {
             step.name,
             (step.arguments ?? {}) as Record<string, unknown>,
           );
+          if (step.name === "get_market_snapshot")
+            result = await withStockYield(result);
         } catch (e) {
           result = { error: e instanceof Error ? e.message : String(e) };
         }
