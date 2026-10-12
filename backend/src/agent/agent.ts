@@ -2,13 +2,19 @@ import "dotenv/config";
 import { GoogleGenAI } from "@google/genai";
 import { executeTool, toolDeclarations } from "./tools.js";
 
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) throw new Error("GEMINI_API_KEY missing in backend/.env");
-
-const ai = new GoogleGenAI({ apiKey });
+// Comma-separated keys. Each key should belong to its own AI Studio project (quota is per project).
+const keys = (process.env.GEMINI_API_KEYS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+if (keys.length === 0) throw new Error("GEMINI_API_KEYS missing in backend/.env");
+const clients = keys.map((apiKey) => new GoogleGenAI({ apiKey }));
 
 const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
-const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL ?? "";
+const FALLBACKS = (process.env.GEMINI_FALLBACK_MODELS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 const MAX_TURNS = 8;
 
 const SYSTEM_PROMPT = `You are NovaSIP's portfolio agent. You manage a user's goal-based savings plan by allocating their deployable funds across five strategies:
@@ -30,31 +36,51 @@ When finished, reply with a two or three sentence summary for the user.`;
 
 function isRetryable(e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
-  return /429|RESOURCE_EXHAUSTED|503|UNAVAILABLE|500|408|timeout|ECONNRESET/i.test(
-    msg,
-  );
+  return /429|RESOURCE_EXHAUSTED|503|UNAVAILABLE|500|408|timeout|ECONNRESET/i.test(msg);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Retry transient errors with exponential backoff + jitter; fall back to a second model if configured.
-async function createWithRetry(params: Record<string, unknown>): Promise<any> {
-  const models = [
-    PRIMARY_MODEL,
-    ...(FALLBACK_MODEL && FALLBACK_MODEL !== PRIMARY_MODEL
-      ? [FALLBACK_MODEL]
-      : []),
-  ];
+type Pin = { client: any; model: string };
+
+// First request of a cycle: try every model x key until one works.
+async function firstRequest(
+  params: Record<string, unknown>,
+): Promise<{ interaction: any; pin: Pin }> {
+  const models = [PRIMARY_MODEL, ...FALLBACKS.filter((m) => m !== PRIMARY_MODEL)];
   let lastError: unknown;
-  for (const model of models) {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      try {
-        return await (ai as any).interactions.create({ ...params, model });
-      } catch (e) {
-        lastError = e;
-        if (!isRetryable(e)) break; // non-transient: try the next model
-        await sleep(1000 * 2 ** attempt + Math.random() * 500);
+  for (let round = 0; round < 2; round++) {
+    for (const model of models) {
+      for (let k = 0; k < clients.length; k++) {
+        try {
+          const interaction = await (clients[k] as any).interactions.create({
+            ...params,
+            model,
+          });
+          return { interaction, pin: { client: clients[k], model } };
+        } catch (e) {
+          lastError = e;
+          console.log(
+            `key#${k + 1} ${model} failed: ${e instanceof Error ? e.message.slice(0, 100) : e}`,
+          );
+        }
       }
+    }
+    await sleep(1500 + Math.random() * 500);
+  }
+  throw lastError;
+}
+
+// Later turns must stay on the same key and model: the conversation state lives in that project.
+async function followUp(params: Record<string, unknown>, pin: Pin): Promise<any> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await pin.client.interactions.create({ ...params, model: pin.model });
+    } catch (e) {
+      lastError = e;
+      if (!isRetryable(e)) break;
+      await sleep(1000 * 2 ** attempt + Math.random() * 500);
     }
   }
   throw lastError;
@@ -63,15 +89,25 @@ async function createWithRetry(params: Record<string, unknown>): Promise<any> {
 export async function runAgentCycle() {
   let input: unknown = "Run a review cycle for the user's portfolio now.";
   let previousId: string | undefined;
+  let pin: Pin | undefined;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const interaction = await createWithRetry({
+    const params = {
       input,
       tools: toolDeclarations,
       system_instruction: SYSTEM_PROMPT,
       generation_config: { temperature: 0.3 },
       ...(previousId ? { previous_interaction_id: previousId } : {}),
-    });
+    };
+
+    let interaction: any;
+    if (!pin) {
+      const r = await firstRequest(params);
+      interaction = r.interaction;
+      pin = r.pin;
+    } else {
+      interaction = await followUp(params, pin);
+    }
 
     const results: unknown[] = [];
     for (const step of interaction.steps ?? []) {
