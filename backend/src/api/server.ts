@@ -14,11 +14,15 @@ import { getHubPosition } from "../chain/vault.js";
 import { getPerformance } from "../hyperliquid/performance.js";
 import { getStockYield } from "../agent/morpho.js";
 import { getRhStatus } from "../chain/rhStatus.js";
+import { STOCK_SYMBOLS } from "../agent/chat.js";
+import { setShockPct } from "../chain/priceShock.js";
+import { creditSurplusYield, rotateBySymbol } from "../chain/rotation.js";
 
 const PORT = Number(process.env.PORT ?? process.env.API_PORT ?? 8787);
 const KEEPER_MIN = Number(process.env.KEEPER_INTERVAL_MIN ?? 60);
 const DEMO_USER = (process.env.WALLET_A ?? "").toLowerCase();
 const TIERS = ["conservative", "balanced", "aggressive"];
+const UNWIND_SHOCK_PCT = -3; // demo price control: makes the buy-back return at least what was sold
 
 type LastRun = { time: string; summary?: string; error?: string };
 const running = new Set<string>();
@@ -185,6 +189,31 @@ const server = http.createServer(async (req, res) => {
         }
       };
       return send(res, 200, await withUser(user, chat));
+    }
+
+    if (req.method === "POST" && path === "/api/unwind") {
+      const body = await readBody(req);
+      const symbol = String(body.symbol ?? "").toUpperCase();
+      if (!STOCK_SYMBOLS.includes(symbol))
+        return send(res, 400, { error: "unknown stock token" });
+      if (running.has(user))
+        return send(res, 409, {
+          error: "Nova is busy with a review, try again in a moment",
+        });
+      running.add(user);
+      try {
+        await setShockPct(UNWIND_SHOCK_PCT);
+        const actions = await withUser(user, async () => {
+          const unwound = await rotateBySymbol(user as `0x${string}`, {
+            [symbol]: 0,
+          });
+          const credited = await creditSurplusYield(user as `0x${string}`);
+          return [...unwound, ...credited];
+        });
+        return send(res, 200, { ok: true, actions });
+      } finally {
+        running.delete(user);
+      }
     }
 
     if (req.method === "POST" && path === "/api/run")

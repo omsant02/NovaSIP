@@ -5,7 +5,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { runNova, saveProfile } from "@/lib/api";
 import { sendChat, type ChatAction, type ChatMessage } from "@/lib/chat";
+import type { StockSymbol } from "@/lib/contracts";
+import { unwindStock } from "@/lib/unwind";
 import { useDeposit } from "@/lib/useDeposit";
+import { useRobinhood } from "@/lib/useRobinhood";
 
 type UiMessage = ChatMessage & { hidden?: boolean };
 
@@ -20,6 +23,7 @@ export function useChat() {
   const { address } = useAccount();
   const queryClient = useQueryClient();
   const deposit = useDeposit();
+  const { data: rh } = useRobinhood();
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const greetedFor = useRef<string | null>(null);
@@ -57,9 +61,58 @@ export function useChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deposit.step]);
 
+  const handleWithdraw = async (
+    a: Extract<ChatAction, { type: "withdraw" | "withdraw_stock" }>,
+  ) => {
+    if (!address) return;
+    let ok = false;
+    try {
+      if (a.type === "withdraw") {
+        ok = await deposit.exitAll();
+      } else {
+        const symbol = a.symbol as StockSymbol;
+        const token = rh?.tokens.find((t) => t.symbol === symbol);
+        if (!token || token.units <= 0) {
+          push({
+            role: "assistant",
+            text: `You don't have any ${symbol} deposited right now.`,
+          });
+          return;
+        }
+        if (token.rotatedUsd > 0) {
+          push({
+            role: "assistant",
+            text: `Bringing ${symbol} back from USDG first...`,
+          });
+          await unwindStock(address, symbol);
+        }
+        ok = await deposit.withdrawStock(symbol, token.units);
+      }
+    } catch (e) {
+      push({
+        role: "assistant",
+        text: `I couldn't finish the withdrawal: ${e instanceof Error ? e.message : "unknown error"}`,
+      });
+      refresh();
+      return;
+    }
+    refresh();
+    push({
+      role: "assistant",
+      text: ok
+        ? "Withdrawal confirmed. The funds are back in your wallet."
+        : "The withdrawal didn't go through, so nothing moved. Tell me when you want to try again.",
+    });
+  };
+
   const handleActions = async (actions: ChatAction[]) => {
     if (!address) return;
     for (const a of actions) {
+      if (a.type === "withdraw" || a.type === "withdraw_stock") {
+        await handleWithdraw(a);
+        continue;
+      }
+
       await saveProfile(address, {
         goalName: a.goalName,
         targetUsd: a.targetUsd,

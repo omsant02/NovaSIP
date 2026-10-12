@@ -34,7 +34,9 @@ export type ChatAction =
       targetUsd?: number;
       goalMonth?: string;
       tier?: TierName;
-    };
+    }
+  | { type: "withdraw" }
+  | { type: "withdraw_stock"; symbol: string };
 
 const CHAT_TIMEOUT_MS = 12_000;
 const CONTEXT_TIMEOUT_MS = 8_000;
@@ -54,12 +56,15 @@ You can:
 - Tell them what they hold, from the wallet data: USDC on HyperEVM (deposit it to earn crypto yield) and stock tokens on Robinhood Chain (deposit them to invest in stocks). Give stock values in dollars only when the data has a price. Do not mention HyperCore.
 - Change their goal with update_goal, including only fields that change.
 - Help them deposit USDC with propose_deposit, or stock tokens with propose_stock_deposit. A deposit needs: goal name, target in USD, target month (YYYY-MM), risk level (conservative, balanced or aggressive) and an amount (USDC, or the number of stock tokens plus which one).
+- Help them withdraw: propose_withdraw returns all their USDC on Hyperliquid (principal plus credited yield) and stops their monthly plan, and propose_stock_withdraw returns all of one stock token on Robinhood Chain.
 
 Deposit rules:
 1. Collect any missing detail by asking, one or two short questions at a time. Suggest sensible defaults. The amount must not exceed what is in their wallet.
 2. Summarize the full plan in one short message and ask for explicit confirmation.
 3. Only after the user clearly confirms (for example "yes" or "confirm"), call propose_deposit or propose_stock_deposit. Never call it earlier.
 4. After calling it, tell the user their wallet will ask them to approve and then deposit (stock tokens use Robinhood Chain, so the wallet may ask to switch network), and that they must confirm there. Never say the money has moved. Only the user can confirm in their wallet.
+
+Withdrawal rules: users can take their money out at any time, so never say you cannot help with a withdrawal and never send them to look for a withdraw button elsewhere. Confirm first, like a deposit, and before confirming tell them two things: leaving USDC before the goal date charges an early-exit fee, and if part of a stock was sold into USDG, Nova buys it back first, which can take a moment. After calling the tool, say their wallet will ask them to confirm. Never say the money has moved. If they ask to withdraw everything, offer propose_withdraw for the USDC and propose_stock_withdraw for each stock they hold, one at a time.
 
 One goal per wallet: each user has a single saved goal for now. Before changing the goal or proposing a deposit, read the saved goal in the data. If the user describes a different goal from the saved one (a different purpose, not just a different amount or date), do not overwrite it silently. Tell them in one sentence that Nova supports one goal per wallet for now, show the saved goal, and ask whether they want to replace it or keep it and just add money toward it. Only replace it after they clearly say replace. If they want to add money to the existing goal, call the deposit tool with the saved goal name, target, target month (convert the saved date to YYYY-MM) and risk level unchanged. If a request looks like a slip, for example the same goal with a new name, point it out and ask before acting.
 
@@ -120,6 +125,24 @@ const clientTools = [
       properties: goalProps,
     },
   },
+  {
+    type: "function",
+    name: "propose_withdraw",
+    description:
+      "Send a request to the user's wallet to withdraw all their USDC from the Hyperliquid-side vault (principal and credited yield). Call only after the user explicitly confirmed.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    type: "function",
+    name: "propose_stock_withdraw",
+    description:
+      "Send a request to the user's wallet to withdraw all of one stock token from the Robinhood Chain vault. Call only after the user explicitly confirmed.",
+    parameters: {
+      type: "object",
+      properties: { symbol: { type: "string", enum: STOCK_SYMBOLS } },
+      required: ["symbol"],
+    },
+  },
 ];
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -150,6 +173,18 @@ function handleClientTool(
     if (!(amount > 0)) return { error: "the number of tokens must be positive" };
     if (!STOCK_SYMBOLS.includes(symbol)) return { error: "unknown stock token" };
     actions.push({ type: "deposit_stock", symbol, amount, tier: args.tier, goalName, targetUsd, goalMonth });
+    return {};
+  }
+
+  if (name === "propose_withdraw") {
+    actions.push({ type: "withdraw" });
+    return {};
+  }
+
+  if (name === "propose_stock_withdraw") {
+    const symbol = String(args.symbol ?? "").toUpperCase();
+    if (!STOCK_SYMBOLS.includes(symbol)) return { error: "unknown stock token" };
+    actions.push({ type: "withdraw_stock", symbol });
     return {};
   }
 
@@ -206,6 +241,9 @@ function transcript(messages: ChatMessage[], context: string): string {
 
 function fallbackReply(actions: ChatAction[], errors: string[]): string {
   if (errors.length > 0) return `I couldn't do that: ${errors[0]}.`;
+  if (actions.some((a) => a.type === "withdraw" || a.type === "withdraw_stock")) {
+    return "Done. Your wallet will ask you to confirm the withdrawal. Nothing moves until you confirm there.";
+  }
   if (actions.some((a) => a.type === "deposit" || a.type === "deposit_stock")) {
     return "Done. Your wallet will ask you to approve and then confirm the deposit. Nothing moves until you confirm there.";
   }

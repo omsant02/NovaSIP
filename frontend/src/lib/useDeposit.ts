@@ -73,7 +73,10 @@ export function useDeposit() {
     return guard(async () => {
       if (!hubClient || !address) throw new Error("Wallet not ready");
       await ensureChain(hyperEvmTestnet.id);
-      const amount = parseUnits(amountUsd.toFixed(USDC_DECIMALS), USDC_DECIMALS);
+      const amount = parseUnits(
+        amountUsd.toFixed(USDC_DECIMALS),
+        USDC_DECIMALS,
+      );
 
       const allowance = await hubClient.readContract({
         address: USDC,
@@ -164,10 +167,75 @@ export function useDeposit() {
     });
   }
 
+  /** Take USDC back out of the hub vault (an early-exit fee applies before the goal date). */
+  function withdrawUsdc(amountUsd: number): Promise<boolean> {
+    return guard(async () => {
+      if (!hubClient) throw new Error("Wallet not ready");
+      await ensureChain(hyperEvmTestnet.id);
+      setStep("depositing");
+      const amount = Math.floor(amountUsd * 1e6) / 1e6;
+      const hash = await writeContractAsync({
+        chainId: hyperEvmTestnet.id,
+        address: HUB_VAULT,
+        abi: vaultAbi,
+        functionName: "withdraw",
+        args: [parseUnits(amount.toFixed(USDC_DECIMALS), USDC_DECIMALS)],
+      });
+      await hubClient.waitForTransactionReceipt({ hash });
+    });
+  }
+
+  /** Exit the hub side completely: all principal plus credited yield, and cancel the plan. */
+  function exitAll(): Promise<boolean> {
+    return guard(async () => {
+      if (!hubClient) throw new Error("Wallet not ready");
+      await ensureChain(hyperEvmTestnet.id);
+      setStep("depositing");
+      const hash = await writeContractAsync({
+        chainId: hyperEvmTestnet.id,
+        address: HUB_VAULT,
+        abi: vaultAbi,
+        functionName: "exitAll",
+      });
+      await hubClient.waitForTransactionReceipt({ hash });
+    });
+  }
+
+  /** Take stock tokens back out of the Robinhood vault. */
+  function withdrawStock(symbol: StockSymbol, units: number): Promise<boolean> {
+    return guard(async () => {
+      if (!rhClient) throw new Error("Wallet not ready");
+      await ensureChain(robinhoodTestnet.id);
+      setStep("depositing");
+      const amount = Math.floor(units * 1e6) / 1e6;
+      const hash = await writeContractAsync({
+        chainId: robinhoodTestnet.id,
+        address: RH_VAULT,
+        abi: rhVaultAbi,
+        functionName: "withdraw",
+        args: [
+          STOCK_TOKENS[symbol],
+          parseUnits(amount.toFixed(6), STOCK_DECIMALS),
+        ],
+      });
+      await rhClient.waitForTransactionReceipt({ hash });
+    });
+  }
+
   function reset() {
     setStep("idle");
     setError(null);
   }
 
-  return { step, error, run, runStock, claim, reset };
+  return {
+    step,
+    error,
+    run,
+    runStock,
+    claim,
+    withdrawUsdc,
+    exitAll,
+    withdrawStock,
+    reset,
+  };
 }

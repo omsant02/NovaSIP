@@ -27,7 +27,9 @@ export type ChatAction =
       targetUsd?: number;
       goalMonth?: string;
       tier?: Tier;
-    };
+    }
+  | { type: "withdraw" }
+  | { type: "withdraw_stock"; symbol: StockSymbol };
 
 export async function sendChat(
   user: string,

@@ -27,11 +27,20 @@ export const erc20Abi = parseAbi([
 
 export const vaultAbi = parseAbi([
   "function deposit(uint256 amount, uint8 tier)",
+  "function withdraw(uint256 amount)",
+  "function exitAll()",
+  "error FundsDeployed()",
+  "error InsufficientPrincipal()",
+  "error ZeroAmount()",
 ]);
 
 export const rhVaultAbi = parseAbi([
   "function deposit(address token, uint256 amount, uint8 tier)",
+  "function withdraw(address token, uint256 amount)",
   "function claimYield(address token)",
+  "error FundsRotated()",
+  "error InsufficientBalance()",
+  "error ZeroAmount()",
 ]);
 
 // matches RiskTier { Conservative=0, Balanced=1, Aggressive=2 }

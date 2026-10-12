@@ -11,6 +11,7 @@ import { ConnectButton } from "@/components/app/ConnectButton";
 import { EmptyState } from "@/components/app/EmptyState";
 import { GoalCard } from "@/components/app/GoalCard";
 import { RobinhoodCard } from "@/components/app/RobinhoodCard";
+import { HubCard } from "@/components/app/HubCard";
 
 export function Dashboard() {
   const { isConnected, status } = useAccount();
@@ -70,6 +71,12 @@ export function Dashboard() {
 
   const pnl = estimatePnl(allocation, total, perf, rh);
 
+  const hub = data.hub as unknown as {
+    hubPrincipal: string;
+    pendingYield?: string;
+    goalDate?: string;
+  };
+
   return (
     <div className="grid content-start gap-6">
       <GoalCard profile={data.profile} total={total} pnl={pnl.total} />
@@ -79,6 +86,13 @@ export function Dashboard() {
         total={total}
         pnl={pnl.byStrategy}
       />
+      {fromUsdc(hub.hubPrincipal) > 0 && (
+        <HubCard
+          principalUsd={fromUsdc(hub.hubPrincipal)}
+          pendingYieldUsd={fromUsdc(hub.pendingYield ?? "0")}
+          goalDateSec={Number(hub.goalDate ?? 0)}
+        />
+      )}
       {rh && rh.totalUsd > 0 && <RobinhoodCard status={rh} />}
     </div>
   );
