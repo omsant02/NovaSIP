@@ -1,9 +1,7 @@
 import { Nav } from "@/components/landing/Nav";
 import { Hero } from "@/components/landing/Hero";
 import { TwoWorlds } from "@/components/landing/TwoWorlds";
-import { HowItWorks } from "@/components/landing/HowItWorks";
-import { Strategies } from "@/components/landing/Strategies";
-import { ActivityPreview } from "@/components/landing/ActivityPreview";
+import { Decisions } from "@/components/landing/Decisions";
 import { Limits } from "@/components/landing/Limits";
 import { FinalCta } from "@/components/landing/FinalCta";
 import { Footer } from "@/components/landing/Footer";
@@ -15,9 +13,7 @@ export default function Home() {
       <main>
         <Hero />
         <TwoWorlds />
-        <HowItWorks />
-        <Strategies />
-        <ActivityPreview />
+        <Decisions />
         <Limits />
         <FinalCta />
       </main>

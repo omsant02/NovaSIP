@@ -13,10 +13,13 @@ export function GoalCalculator() {
   const [months, setMonths] = useState(12);
   const [tier, setTier] = useState<Tier>("balanced");
 
-  const plan = useMemo(() => calcPlan(goal, months, tier), [goal, months, tier]);
+  const plan = useMemo(
+    () => calcPlan(goal, months, tier),
+    [goal, months, tier],
+  );
 
   return (
-    <div className="flex flex-col gap-6 rounded-[28px] bg-field p-8">
+    <div className="flex flex-col gap-6 rounded-[28px] bg-field p-6">
       <div className="flex flex-col gap-5">
         <RangeField
           id="goal"
@@ -41,7 +44,11 @@ export function GoalCalculator() {
         <TierPicker value={tier} onChange={setTier} />
       </div>
 
-      <GoalPath points={plan.points} months={months} />
+      <GoalPath
+        points={plan.points}
+        months={months}
+        goalLabel={`$${usd(goal)}`}
+      />
       <PlanStats plan={plan} tierLabel={PLANS[tier].label} />
     </div>
   );

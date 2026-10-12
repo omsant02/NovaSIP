@@ -1,32 +1,60 @@
-import { ButtonLink } from "@/components/ui/ButtonLink";
 import { GoalCalculator } from "./GoalCalculator";
+
+const TONES = {
+  mint: { border: "border-mint/50", title: "text-mint" },
+  periwinkle: { border: "border-periwinkle/50", title: "text-periwinkle" },
+} as const;
+
+function Engine({
+  tone,
+  title,
+  body,
+}: {
+  tone: keyof typeof TONES;
+  title: string;
+  body: string;
+}) {
+  return (
+    <div className={`border-l-2 pl-5 ${TONES[tone].border}`}>
+      <div
+        className={`font-display text-[28px] font-bold leading-none tracking-[-0.02em] ${TONES[tone].title}`}
+      >
+        {title}
+      </div>
+      <div className="mt-2 max-w-[420px] text-[18px] leading-snug text-muted">
+        {body}
+      </div>
+    </div>
+  );
+}
 
 export function Hero() {
   return (
-    <section
-      id="top"
-      className="mx-auto flex max-w-[1200px] flex-wrap items-center gap-14 px-6 pb-24 pt-14"
-    >
-      <div className="flex min-w-0 flex-1 basis-[440px] flex-col gap-7">
-        <h1 className="font-display text-[clamp(48px,7vw,84px)] font-bold leading-[0.98] tracking-[-0.04em]">
-          Set the goal. Nova does the rest.
-        </h1>
-        <p className="max-w-[500px] text-[21px] leading-[1.55] text-muted">
-          Tell Nova what you&apos;re saving for. An AI agent spreads your
-          deposits across crypto yield on Hyperliquid and stock-token lending on
-          Robinhood Chain, then shows you every move it makes.
-        </p>
-        <div className="flex flex-wrap gap-3.5">
-          <ButtonLink href="/app" size="lg">
-            Start my plan
-          </ButtonLink>
-          <ButtonLink href="#how" variant="secondary" size="lg">
-            See how it works
-          </ButtonLink>
+    <section id="top" className="mx-auto max-w-[1200px] px-6 pb-20 pt-12">
+      <div className="grid items-center gap-14 lg:grid-cols-[minmax(0,1fr)_500px]">
+        <div className="flex min-w-0 flex-col gap-8">
+          <h1 className="font-display text-[clamp(44px,6vw,80px)] font-extrabold leading-[0.95] tracking-[-0.045em]">
+            <span className="block">Set the goal.</span>
+            <span className="block">Nova does</span>
+            <span className="block">the rest.</span>
+          </h1>
+          <p className="max-w-[460px] text-[21px] leading-[1.45] text-muted">
+            Automated investing for your savings goals. Every move explained.
+          </p>
+          <div className="flex flex-col gap-6">
+            <Engine
+              tone="mint"
+              title="Crypto yield"
+              body="Earns while the market moves, inside hard risk limits."
+            />
+            <Engine
+              tone="periwinkle"
+              title="Stock tokens"
+              body="Sold high into dollars that earn interest while they wait."
+            />
+          </div>
         </div>
-      </div>
 
-      <div className="min-w-0 flex-1 basis-[520px]">
         <GoalCalculator />
       </div>
     </section>

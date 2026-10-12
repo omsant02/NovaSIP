@@ -4,15 +4,16 @@ import { GOAL_STAR, type PathPoint } from "@/lib/plan";
 type Props = {
   points: PathPoint[];
   months: number;
+  goalLabel?: string;
 };
 
-export function GoalPath({ points, months }: Props) {
+export function GoalPath({ points, months, goalLabel }: Props) {
   const line = [...points, GOAL_STAR]
     .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)
     .join(" ");
 
   return (
-    <div className="relative h-[260px] overflow-hidden rounded-[20px] bg-midnight">
+    <div className="relative h-[200px] overflow-hidden rounded-[20px] bg-midnight">
       <svg
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
@@ -46,6 +47,11 @@ export function GoalPath({ points, months }: Props) {
         className="ns-star absolute"
         style={{ left: `${GOAL_STAR.x}%`, top: `${GOAL_STAR.y}%` }}
       >
+        {goalLabel && (
+          <span className="absolute right-full top-1/2 -translate-y-1/2 whitespace-nowrap pr-1 font-display text-lg font-bold text-gold">
+            {goalLabel}
+          </span>
+        )}
         <StarMark size={40} className="text-gold" title="Your goal" />
       </div>
 

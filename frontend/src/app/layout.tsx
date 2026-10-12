@@ -15,9 +15,8 @@ const hanken = Hanken_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "NovaSIP: set the goal, Nova does the rest",
-  description:
-    "An AI agent that turns your savings goal into a plan across Hyperliquid and Robinhood Chain, and explains every move.",
+  title: "NovaSIP: automated investing for your savings goals",
+  description: "An AI agent that optimizes your savings across Hyperliquid and Robinhood Chain, rebalances within hard limits, and explains every move.",
 };
 
 export default function RootLayout({
