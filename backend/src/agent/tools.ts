@@ -1,0 +1,232 @@
+import { DEFAULT_COINS, getFundingSnapshot, getRangeSignal } from "../hyperliquid/market.js";
+import {
+  closeCarry,
+  getHlpEquity,
+  getLendingState,
+  hlpDeposit,
+  lendSupply,
+  lendWithdraw,
+  openCarry,
+} from "../hyperliquid/hl.js";
+import {
+  CAPS,
+  MAX_CHANGE_PER_CYCLE_PCT,
+  STRATEGIES,
+  checkProposal,
+  type Allocation,
+} from "./guardrails.js";
+import { appendDecision, getBook, saveBook, type ActionRecord } from "./state.js";
+
+// Demo-sized real actions on Hyperliquid testnet. The book (percentages) is what the dashboard shows;
+// real orders are intentionally small.
+const CARRY_DEMO_SIZE_ETH = "0.1";
+const DEMO_LEND_MAX_USD = 5;
+const DEMO_HLP_MAX_USD = 5;
+const MIN_LEND_USD = 1;
+
+// Last values observed on the testnet UI; these are variable, not guaranteed.
+const LENDING_APY_PCT = 1.9;
+const HLP_APR_PCT = 4;
+
+export const toolDeclarations = [
+  {
+    type: "function",
+    name: "get_market_snapshot",
+    description:
+      "Current perp funding rates (annualized %), prices, and 1-year range signals for the given coins, plus the latest observed lending APY and HLP APR.",
+    parameters: {
+      type: "object",
+      properties: {
+        coins: {
+          type: "array",
+          items: { type: "string" },
+          description: "Coins to look at, e.g. ['ETH','BTC','SOL']. Defaults to ETH, BTC, SOL.",
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    name: "get_portfolio",
+    description:
+      "The user's risk tier, deployable funds, current allocation (percent per strategy), the caps for their tier, and live lending and HLP state.",
+    parameters: {
+      type: "object",
+      properties: {
+        detail: { type: "boolean", description: "Set true to include raw lending and HLP state." },
+      },
+    },
+  },
+  {
+    type: "function",
+    name: "propose_allocation",
+    description:
+      "Propose a new target allocation (percent of deployable funds per strategy, remainder stays idle cash). The guardrails check it; if approved, the actions are executed. If rejected, the reasons are returned so you can propose a corrected allocation.",
+    parameters: {
+      type: "object",
+      properties: {
+        carry: { type: "number", description: "Delta-neutral ETH carry, percent." },
+        lending: { type: "number", description: "HyperCore USDC lending, percent." },
+        hlp: { type: "number", description: "HLP vault, percent. Illiquid (4-day lock), can only grow." },
+        directional: { type: "number", description: "Directional alpha, percent." },
+        robinhood: { type: "number", description: "Robinhood Chain stock-token lending (simulated), percent." },
+        reasoning: { type: "string", description: "Short plain-language explanation shown to the user." },
+      },
+      required: ["carry", "lending", "hlp", "directional", "robinhood", "reasoning"],
+    },
+  },
+];
+
+async function getMarketSnapshot(args: Record<string, unknown>) {
+  const coins =
+    Array.isArray(args.coins) && args.coins.length ? (args.coins as string[]) : DEFAULT_COINS;
+  const funding = await getFundingSnapshot(coins);
+  const ranges = await Promise.all(
+    coins.map((c) =>
+      getRangeSignal(c).catch((e) => ({ coin: c, error: e instanceof Error ? e.message : String(e) }))
+    )
+  );
+  return {
+    funding,
+    ranges,
+    lending: { supplyApyPct: LENDING_APY_PCT, note: "variable; last observed on the testnet Earn page" },
+    hlp: { aprPct: HLP_APR_PCT, note: "30-day APR shown on the vault page; illiquid, 4-day lockup" },
+  };
+}
+
+async function getPortfolio(args: Record<string, unknown>) {
+  const book = await getBook();
+  const initial = STRATEGIES.every((s) => book.allocation[s] === 0);
+  const base = {
+    tier: book.tier,
+    totalUsd: book.totalUsd,
+    allocationPct: book.allocation,
+    isInitialDeployment: initial,
+    caps: CAPS[book.tier],
+    maxChangePerCyclePct: MAX_CHANGE_PER_CYCLE_PCT,
+  };
+  if (!args.detail) return base;
+  const [lending, hlp] = await Promise.all([getLendingState(), getHlpEquity()]);
+  return { ...base, lending, hlp };
+}
+
+async function run(
+  actions: ActionRecord[],
+  name: string,
+  args: unknown,
+  simulated: boolean,
+  fn: () => Promise<unknown>
+) {
+  try {
+    const result = simulated ? "simulated" : await fn();
+    actions.push({ name, args, result, simulated });
+  } catch (e) {
+    actions.push({
+      name,
+      args,
+      result: null,
+      simulated,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+async function execute(current: Allocation, target: Allocation, totalUsd: number) {
+  const actions: ActionRecord[] = [];
+  const deltaUsd = (s: keyof Allocation) => ((target[s] - current[s]) / 100) * totalUsd;
+
+  // Lending (real, demo-sized)
+  const dl = deltaUsd("lending");
+  if (dl > 0) {
+    const amt = Math.min(dl, DEMO_LEND_MAX_USD);
+    if (amt >= MIN_LEND_USD) {
+      await run(actions, "lend_supply", { usd: amt.toFixed(2) }, false, () => lendSupply(amt.toFixed(2)));
+    }
+  } else if (dl < 0) {
+    const amt = Math.min(-dl, DEMO_LEND_MAX_USD);
+    if (amt >= MIN_LEND_USD) {
+      await run(actions, "lend_withdraw", { usd: amt.toFixed(2) }, false, () => lendWithdraw(amt.toFixed(2)));
+    }
+  }
+
+  // Carry (real, fixed demo size, only on open/close transitions)
+  if (current.carry <= 0 && target.carry > 0) {
+    await run(actions, "open_carry", { sizeEth: CARRY_DEMO_SIZE_ETH }, false, () =>
+      openCarry(CARRY_DEMO_SIZE_ETH)
+    );
+  } else if (current.carry > 0 && target.carry <= 0) {
+    await run(actions, "close_carry", { sizeEth: CARRY_DEMO_SIZE_ETH }, false, () =>
+      closeCarry(CARRY_DEMO_SIZE_ETH)
+    );
+  }
+
+  // HLP (real, demo-sized, only grows)
+  const dh = deltaUsd("hlp");
+  if (dh > 0) {
+    const amt = Math.min(dh, DEMO_HLP_MAX_USD);
+    await run(actions, "hlp_deposit", { usd: amt }, false, () => hlpDeposit(amt));
+  }
+
+  // Directional: no order logic built yet, recorded as a paper position
+  if (target.directional !== current.directional) {
+    await run(actions, "directional_paper", { from: current.directional, to: target.directional }, true, async () => null);
+  }
+
+  // Robinhood Chain: simulated leg (MockMorpho)
+  if (target.robinhood !== current.robinhood) {
+    await run(actions, "rh_allocate", { from: current.robinhood, to: target.robinhood }, true, async () => null);
+  }
+
+  return actions;
+}
+
+async function proposeAllocation(args: Record<string, unknown>) {
+  const book = await getBook();
+  const current = book.allocation;
+  const target = {} as Allocation;
+  for (const s of STRATEGIES) target[s] = Number(args[s]);
+  const reasoning = String(args.reasoning ?? "");
+  const initial = STRATEGIES.every((s) => current[s] === 0);
+
+  const verdict = checkProposal(book.tier, current, target, { initial });
+  if (!verdict.approved) {
+    await appendDecision({
+      time: new Date().toISOString(),
+      tier: book.tier,
+      from: current,
+      to: target,
+      approved: false,
+      reasons: verdict.reasons,
+      reasoning,
+      actions: [],
+    });
+    return { approved: false, reasons: verdict.reasons };
+  }
+
+  const actions = await execute(current, target, book.totalUsd);
+  await saveBook({ ...book, allocation: target });
+  await appendDecision({
+    time: new Date().toISOString(),
+    tier: book.tier,
+    from: current,
+    to: target,
+    approved: true,
+    reasons: [],
+    reasoning,
+    actions,
+  });
+  return { approved: true, newAllocationPct: target, actions };
+}
+
+export async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  switch (name) {
+    case "get_market_snapshot":
+      return getMarketSnapshot(args);
+    case "get_portfolio":
+      return getPortfolio(args);
+    case "propose_allocation":
+      return proposeAllocation(args);
+    default:
+      return { error: `Unknown tool: ${name}` };
+  }
+}
