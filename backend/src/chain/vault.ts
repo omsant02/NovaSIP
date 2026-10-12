@@ -40,23 +40,26 @@ export const robinhood = defineChain({
 
 export const HUB = need("VAULT") as Address;
 export const RH_VAULT = need("RH_VAULT") as Address;
+export const RH_USDG = need("RH_USDG") as Address;
+export const RH_MORPHO = need("RH_MORPHO") as Address;
+export const RH_EXCHANGE = need("RH_EXCHANGE") as Address;
 
-const account = privateKeyToAccount(need("PRIVATE_KEY") as `0x${string}`);
+export const account = privateKeyToAccount(need("PRIVATE_KEY") as `0x${string}`);
 
-const hubPublic = createPublicClient({ chain: hyperEvm, transport: http() });
-const rhPublic = createPublicClient({ chain: robinhood, transport: http() });
+export const hubPublic = createPublicClient({ chain: hyperEvm, transport: http() });
+export const rhPublic = createPublicClient({ chain: robinhood, transport: http() });
 const hubWallet = createWalletClient({
   account,
   chain: hyperEvm,
   transport: http(),
 });
-const rhWallet = createWalletClient({
+export const rhWalletClient = createWalletClient({
   account,
   chain: robinhood,
   transport: http(),
 });
 
-// ---------- Reads ----------
+// ---------- Hub reads ----------
 
 export async function getHubPosition(user: Address) {
   return (await hubPublic.readContract({
@@ -82,6 +85,16 @@ export async function getDeployedToCore(): Promise<bigint> {
   })) as bigint;
 }
 
+// ---------- Robinhood vault reads ----------
+
+export async function getRhTokens(): Promise<Address[]> {
+  return (await rhPublic.readContract({
+    address: RH_VAULT,
+    abi: rhAbi,
+    functionName: "tokens",
+  })) as Address[];
+}
+
 export async function getRhBalance(
   user: Address,
   token: Address,
@@ -94,12 +107,48 @@ export async function getRhBalance(
   })) as bigint;
 }
 
-export async function getRhDeployed(token: Address): Promise<bigint> {
+export async function getRhTotalBalance(token: Address): Promise<bigint> {
   return (await rhPublic.readContract({
     address: RH_VAULT,
     abi: rhAbi,
-    functionName: "deployed",
+    functionName: "totalBalance",
     args: [token],
+  })) as bigint;
+}
+
+export async function getRhRotation(token: Address) {
+  const r = (await rhPublic.readContract({
+    address: RH_VAULT,
+    abi: rhAbi,
+    functionName: "rotation",
+    args: [token],
+  })) as readonly [bigint, bigint, bigint, bigint];
+  return {
+    stockRotated: r[0],
+    usdgIdle: r[1],
+    parkedShares: r[2],
+    parkedAssets: r[3],
+  };
+}
+
+export async function getRhSurplus(token: Address): Promise<bigint> {
+  return (await rhPublic.readContract({
+    address: RH_VAULT,
+    abi: rhAbi,
+    functionName: "surplus",
+    args: [token],
+  })) as bigint;
+}
+
+export async function getRhYieldOwed(
+  user: Address,
+  token: Address,
+): Promise<bigint> {
+  return (await rhPublic.readContract({
+    address: RH_VAULT,
+    abi: rhAbi,
+    functionName: "yieldOwed",
+    args: [user, token],
   })) as bigint;
 }
 
@@ -117,17 +166,18 @@ export async function hubWrite(functionName: string, args: readonly unknown[]) {
 }
 
 export async function rhWrite(functionName: string, args: readonly unknown[]) {
-  const hash = await rhWallet.writeContract({
+  const hash = await rhWalletClient.writeContract({
     address: RH_VAULT,
     abi: rhAbi,
     functionName,
     args,
   });
   const receipt = await rhPublic.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error(`${functionName} reverted (${hash})`);
   return { hash, status: receipt.status };
 }
 
-// Convenience wrappers for the calls we already proved with cast
+// Hub wrappers
 export const deployToCore = (amount6: bigint) =>
   hubWrite("deployToCore", [amount6]);
 export const acknowledgeCoreReturn = (amount6: bigint) =>
@@ -136,7 +186,17 @@ export const recordRHDeposit = (user: Address, usd6: bigint, tier: number) =>
   hubWrite("recordRHDeposit", [user, usd6, tier]);
 export const recordRHWithdrawal = (user: Address, usd6: bigint) =>
   hubWrite("recordRHWithdrawal", [user, usd6]);
-export const rhAllocate = (token: Address, amount: bigint) =>
-  rhWrite("allocate", [token, amount]);
-export const rhRecall = (token: Address, shares: bigint) =>
-  rhWrite("recall", [token, shares]);
+
+// Robinhood vault rotation wrappers
+export const rhSellToUsdg = (token: Address, amount: bigint, minUsdgOut: bigint) =>
+  rhWrite("sellToUsdg", [token, amount, minUsdgOut]);
+export const rhParkUsdg = (token: Address, amount: bigint) =>
+  rhWrite("parkUsdg", [token, amount]);
+export const rhUnparkUsdg = (token: Address, shares: bigint) =>
+  rhWrite("unparkUsdg", [token, shares]);
+export const rhBuyBackStock = (token: Address, usdgAmount: bigint, stockToRestore: bigint) =>
+  rhWrite("buyBackStock", [token, usdgAmount, stockToRestore]);
+export const rhRecognizeYield = (token: Address, amount: bigint) =>
+  rhWrite("recognizeYield", [token, amount]);
+export const rhCreditYield = (user: Address, token: Address, amount: bigint) =>
+  rhWrite("creditYield", [user, token, amount]);

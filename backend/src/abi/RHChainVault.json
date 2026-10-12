@@ -18,29 +18,21 @@
         "internalType": "address[]"
       },
       {
-        "name": "strategies_",
-        "type": "address[]",
-        "internalType": "address[]"
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "allocate",
-    "inputs": [
-      {
-        "name": "token",
+        "name": "exchange_",
         "type": "address",
         "internalType": "address"
       },
       {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "usdg_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "usdgVault_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -66,6 +58,29 @@
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "buyBackStock",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "usdgAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "stockToRestore",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -105,25 +120,6 @@
   },
   {
     "type": "function",
-    "name": "deployed",
-    "inputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "deposit",
     "inputs": [
       {
@@ -160,6 +156,19 @@
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "exchange",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IExchange"
       }
     ],
     "stateMutability": "view"
@@ -263,7 +272,7 @@
   },
   {
     "type": "function",
-    "name": "recall",
+    "name": "parkUsdg",
     "inputs": [
       {
         "name": "token",
@@ -271,13 +280,32 @@
         "internalType": "address"
       },
       {
-        "name": "shares",
+        "name": "amount",
         "type": "uint256",
         "internalType": "uint256"
       }
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "parkedShares",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -306,23 +334,10 @@
   },
   {
     "type": "function",
-    "name": "setOperator",
+    "name": "rotatedStock",
     "inputs": [
       {
-        "name": "newOperator",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "strategyAssets",
-    "inputs": [
-      {
-        "name": "token",
+        "name": "",
         "type": "address",
         "internalType": "address"
       }
@@ -338,22 +353,73 @@
   },
   {
     "type": "function",
-    "name": "strategyOf",
+    "name": "rotation",
     "inputs": [
       {
-        "name": "",
+        "name": "token",
         "type": "address",
         "internalType": "address"
       }
     ],
     "outputs": [
       {
-        "name": "",
+        "name": "stockRotated",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "usdgIdleAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "shares",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "parkedAssets",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "sellToUsdg",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minUsdgOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setOperator",
+    "inputs": [
+      {
+        "name": "newOperator",
         "type": "address",
         "internalType": "address"
       }
     ],
-    "stateMutability": "view"
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -464,6 +530,69 @@
   },
   {
     "type": "function",
+    "name": "unparkUsdg",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "shares",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "usdg",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IERC20"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "usdgIdle",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "usdgVault",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IERC4626"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "withdraw",
     "inputs": [
       {
@@ -525,7 +654,7 @@
   },
   {
     "type": "event",
-    "name": "Allocated",
+    "name": "BoughtBack",
     "inputs": [
       {
         "name": "token",
@@ -534,13 +663,19 @@
         "internalType": "address"
       },
       {
-        "name": "amount",
+        "name": "usdgSpent",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
       },
       {
-        "name": "shares",
+        "name": "stockReceived",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "stockRestored",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -619,7 +754,57 @@
   },
   {
     "type": "event",
-    "name": "Recalled",
+    "name": "Parked",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "usdgAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "shares",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Rotated",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "stockSold",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "usdgReceived",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Unparked",
     "inputs": [
       {
         "name": "token",
@@ -634,13 +819,7 @@
         "internalType": "uint256"
       },
       {
-        "name": "received",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "principalBack",
+        "name": "usdgReceived",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -763,12 +942,7 @@
   },
   {
     "type": "error",
-    "name": "DeployDidNotMoveFunds",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "DeployExceedsPrincipal",
+    "name": "BuyBackBelowPrincipal",
     "inputs": []
   },
   {
@@ -778,7 +952,7 @@
   },
   {
     "type": "error",
-    "name": "FundsDeployed",
+    "name": "FundsRotated",
     "inputs": []
   },
   {
@@ -788,7 +962,12 @@
   },
   {
     "type": "error",
-    "name": "LengthMismatch",
+    "name": "InsufficientShares",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientUsdg",
     "inputs": []
   },
   {
@@ -840,6 +1019,16 @@
   },
   {
     "type": "error",
+    "name": "RestoreExceedsRotated",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RotateExceedsPrincipal",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "SafeERC20FailedOperation",
     "inputs": [
       {
@@ -851,12 +1040,22 @@
   },
   {
     "type": "error",
-    "name": "StrategyAssetMismatch",
+    "name": "SwapDidNotMoveFunds",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TokenIsUsdg",
     "inputs": []
   },
   {
     "type": "error",
     "name": "TokenNotAllowed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UsdgVaultAssetMismatch",
     "inputs": []
   },
   {

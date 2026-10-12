@@ -8,7 +8,14 @@ await withUser(user, async () => {
   const book = await getBook();
   await saveBook({
     ...book,
-    allocation: { carry: 0, lending: 0, hlp: 0, directional: 0, robinhood: 0 },
+    allocation: {
+      carry: 0,
+      lending: 0,
+      hlp: 0,
+      directional: 0,
+      stocks: 0,
+      robinhood: 0,
+    },
   });
   console.log("Book reset to all zeros for", user);
 });

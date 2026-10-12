@@ -13,6 +13,7 @@ import {
 import { getHubPosition } from "../chain/vault.js";
 import { getPerformance } from "../hyperliquid/performance.js";
 import { getStockYield } from "../agent/morpho.js";
+import { getRhStatus } from "../chain/rhStatus.js";
 
 const PORT = Number(process.env.API_PORT ?? 8787);
 const KEEPER_MIN = Number(process.env.KEEPER_INTERVAL_MIN ?? 60);
@@ -95,7 +96,10 @@ async function getState(user: string) {
 let perfCache: { at: number; data: unknown } | null = null;
 async function performance() {
   if (perfCache && Date.now() - perfCache.at < 30_000) return perfCache.data;
-    const data = { ...(await getPerformance()), stockYield: await getStockYield() };
+  const data = {
+    ...(await getPerformance()),
+    stockYield: await getStockYield(),
+  };
   perfCache = { at: Date.now(), data };
   return data;
 }
@@ -116,6 +120,14 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && path === "/api/performance") {
       return send(res, 200, await performance());
+    }
+
+    if (req.method === "GET" && path === "/api/robinhood") {
+      return send(
+        res,
+        200,
+        await withUser(user, () => getRhStatus(user as `0x${string}`)),
+      );
     }
 
     if (req.method === "GET" && path === "/api/decisions") {

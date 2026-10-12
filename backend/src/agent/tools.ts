@@ -1,3 +1,4 @@
+import type { Address } from "viem";
 import {
   DEFAULT_COINS,
   getFundingSnapshot,
@@ -20,6 +21,21 @@ import {
   type Allocation,
 } from "./guardrails.js";
 import { getWalletAssets } from "../chain/walletAssets.js";
+import {
+  fromUnits,
+  getAllTokenMeta,
+  getFundSplit,
+  getHoldings,
+  syncDepositsToHub,
+} from "../chain/robinhood.js";
+import {
+  accrueMorphoYield,
+  creditSurplusYield,
+  rotateBySymbol,
+  rotateToTarget,
+} from "../chain/rotation.js";
+import { getStockQuotes } from "../chain/prices.js";
+import { getStockYield } from "./morpho.js";
 import {
   appendDecision,
   currentUser,
@@ -46,6 +62,9 @@ const HL_API =
     ? "https://api.hyperliquid.xyz"
     : "https://api.hyperliquid-testnet.xyz";
 const HLP_VAULT_ADDRESS = "0xa15099a30bbf2e68942d6f4c43d70d04faeab0a0";
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 async function hlInfo(body: Record<string, unknown>): Promise<any> {
   const res = await fetch(`${HL_API}/info`, {
@@ -106,7 +125,7 @@ export const toolDeclarations = [
     type: "function",
     name: "get_wallet_assets",
     description:
-      "What the current user holds: funds already deposited in the vaults, USDC on HyperEVM, stock tokens on Robinhood Chain (wallet and vault), and HyperCore spot balances. Read-only; use it to suggest deposits.",
+      "What the current user holds: funds already deposited in the vaults, USDC on HyperEVM, stock tokens on Robinhood Chain (wallet and vault, with USD values), and HyperCore spot balances. Read-only; use it to suggest deposits.",
     parameters: {
       type: "object",
       properties: {
@@ -118,7 +137,7 @@ export const toolDeclarations = [
     type: "function",
     name: "get_market_snapshot",
     description:
-      "Current perp funding rates (annualized %), prices, and 1-year range signals for the given coins, plus the live lending supply APY and HLP APR.",
+      "Current perp funding rates (annualized %), prices, and 1-year range signals for the given coins, the live lending supply APY and HLP APR, plus live stock quotes (price, day move, position in the 52-week range) for the Robinhood Chain stock tokens.",
     parameters: {
       type: "object",
       properties: {
@@ -135,7 +154,7 @@ export const toolDeclarations = [
     type: "function",
     name: "get_portfolio",
     description:
-      "The user's risk tier, deployable funds (their real deposits in the vaults), current allocation (percent per strategy), the caps for their tier, and live lending and HLP state.",
+      "The user's risk tier, deployable funds, how those funds split between Hyperliquid and Robinhood Chain, their stock-token holdings (with how much of each is already in USDG), current allocation (percent per strategy), the caps for their tier, and live lending and HLP state.",
     parameters: {
       type: "object",
       properties: {
@@ -150,17 +169,17 @@ export const toolDeclarations = [
     type: "function",
     name: "propose_allocation",
     description:
-      "Propose a new target allocation (percent of deployable funds per strategy, remainder stays idle cash). The guardrails check it; if approved, the actions are executed. If rejected, the reasons are returned so you can propose a corrected allocation.",
+      "Propose a new target allocation (percent of deployable funds per strategy, remainder stays idle cash). The guardrails check it; if approved, the actions are executed. If rejected, the reasons are returned so you can propose a corrected allocation. Hyperliquid strategies can only use funds deposited on Hyperliquid. For stock tokens on Robinhood Chain, set the 'rotate' map instead of stocks/robinhood: it decides, per stock, how much sits in USDG on Morpho; the stocks and robinhood percentages are then computed for you.",
     parameters: {
       type: "object",
       properties: {
         carry: {
           type: "number",
-          description: "Delta-neutral ETH carry, percent.",
+          description: "Delta-neutral carry on Hyperliquid, percent.",
         },
         lending: {
           type: "number",
-          description: "HyperCore USDC lending, percent.",
+          description: "Hyperliquid USDC lending (portfolio-margin), percent.",
         },
         hlp: {
           type: "number",
@@ -169,46 +188,61 @@ export const toolDeclarations = [
         },
         directional: {
           type: "number",
-          description: "Directional alpha, percent.",
+          description: "Directional alpha on Hyperliquid, percent.",
+        },
+        rotate: {
+          type: "object",
+          description:
+            "Per stock held on Robinhood Chain: the percent (0 to 100) of that holding that should sit in USDG earning the Morpho rate. 0 keeps it as stock, 100 sells all of it into USDG. Include every stock the user holds, e.g. {\"PLTR\":100,\"AMZN\":50,\"NFLX\":0}.",
+          properties: {
+            TSLA: { type: "number" },
+            AMZN: { type: "number" },
+            AMD: { type: "number" },
+            NFLX: { type: "number" },
+            PLTR: { type: "number" },
+          },
+        },
+        stocks: {
+          type: "number",
+          description:
+            "Only if you do not set rotate: stock tokens held on Robinhood Chain, percent.",
         },
         robinhood: {
           type: "number",
           description:
-            "Robinhood Chain stock-token lending (simulated), percent.",
+            "Only if you do not set rotate: stock tokens sold into USDG and lent on Morpho, percent.",
         },
         reasoning: {
           type: "string",
           description: "Short plain-language explanation shown to the user.",
         },
       },
-      required: [
-        "carry",
-        "lending",
-        "hlp",
-        "directional",
-        "robinhood",
-        "reasoning",
-      ],
+      required: ["carry", "lending", "hlp", "directional", "reasoning"],
     },
   },
 ];
 
-// Deployable funds = what the user really deposited (hub + Robinhood principal).
-// Falls back to the stored book value if the on-chain read reports an error.
-async function getDeployableUsd(
-  fallbackUsd: number,
-): Promise<{ usd: number; source: "hub" | "book" }> {
+// Deployable funds = Hyperliquid deposits (hub) + stock tokens in the Robinhood vault at live prices.
+// Falls back to the stored book value if the on-chain read fails.
+async function getFunds(fallbackUsd: number) {
   try {
-    const w = await getWalletAssets(currentUser());
-    if (((w as any).errors?.length ?? 0) > 0) {
-      return { usd: fallbackUsd, source: "book" };
+    const split = await getFundSplit(currentUser() as Address);
+    if (Number.isFinite(split.totalUsd)) {
+      return { usd: split.totalUsd, source: "hub" as const, split };
     }
-    const d = (w as any).deposited;
-    const usd = Number(d.hubPrincipalUsd) + Number(d.robinhoodPrincipalUsd);
-    if (!Number.isFinite(usd)) return { usd: fallbackUsd, source: "book" };
-    return { usd, source: "hub" };
   } catch {
-    return { usd: fallbackUsd, source: "book" };
+    // fall through to the book value
+  }
+  return { usd: fallbackUsd, source: "book" as const, split: null };
+}
+
+async function getStockMarket() {
+  try {
+    const metas = await getAllTokenMeta();
+    const quotes = await getStockQuotes(metas.map((m) => m.symbol));
+    return Object.values(quotes).filter(Boolean);
+  } catch {
+    return [];
   }
 }
 
@@ -217,9 +251,10 @@ async function getMarketSnapshot(args: Record<string, unknown>) {
     Array.isArray(args.coins) && args.coins.length
       ? (args.coins as string[])
       : DEFAULT_COINS;
-  const [funding, rates] = await Promise.all([
+  const [funding, rates, stocks] = await Promise.all([
     getFundingSnapshot(coins),
     getLiveRates(),
+    getStockMarket(),
   ]);
   const ranges = await Promise.all(
     coins.map((c) =>
@@ -234,13 +269,24 @@ async function getMarketSnapshot(args: Record<string, unknown>) {
     ranges,
     lending: rates.lending,
     hlp: rates.hlp,
+    stocks,
   };
 }
 
 async function getPortfolio(args: Record<string, unknown>) {
+  const user = currentUser() as Address;
   const book = await getBook();
   const profile = await getProfile();
-  const deployable = await getDeployableUsd(book.totalUsd);
+
+  // Keep the hub books in step with the Robinhood vault before reading them.
+  try {
+    await syncDepositsToHub(user, book.tier);
+  } catch {
+    // reading still works without the sync
+  }
+
+  const funds = await getFunds(book.totalUsd);
+  const rh = await getHoldings(user).catch(() => null);
   const recent = (await readDecisions(3)).map((d) => ({
     time: d.time,
     approved: d.approved,
@@ -257,8 +303,32 @@ async function getPortfolio(args: Record<string, unknown>) {
 
   const base = {
     tier: book.tier,
-    totalUsd: deployable.usd,
-    totalUsdSource: deployable.source,
+    totalUsd: funds.usd,
+    totalUsdSource: funds.source,
+    fundsByChain: funds.split
+      ? {
+          hyperliquidUsd: round2(funds.split.hubUsd),
+          robinhoodUsd: round2(funds.split.rhUsd),
+          hyperliquidSharePct: round1(funds.split.hubSharePct),
+          robinhoodSharePct: round1(funds.split.rhSharePct),
+        }
+      : null,
+    stockHoldings: rh
+      ? rh.holdings
+          .filter((h) => h.units > 0n)
+          .map((h) => ({
+            symbol: h.symbol,
+            units: fromUnits(h.units, h.decimals),
+            priceUsd: h.priceUsd,
+            valueUsd: round2(h.valueUsd),
+            heldUsd: round2(h.heldUsd),
+            rotatedIntoUsdgUsd: round2(h.rotatedUsd),
+            rotatedPct:
+              h.units > 0n
+                ? round1((Number(h.rotatedUnits) / Number(h.units)) * 100)
+                : 0,
+          }))
+      : [],
     goal: {
       name: profile.goalName,
       targetUsd: profile.targetUsd,
@@ -298,10 +368,43 @@ async function run(
   }
 }
 
+// rotate map from the model: SYMBOL -> percent of that holding in USDG (0 to 100).
+function parseRotate(raw: unknown): Record<string, number> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const n = Number(v);
+    if (Number.isFinite(n)) out[k.toUpperCase()] = Math.min(100, Math.max(0, n));
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+// The stocks / robinhood percentages that follow from a rotate map.
+async function deriveRhTargets(
+  user: Address,
+  rotate: Record<string, number>,
+  totalUsd: number,
+) {
+  const { holdings, totalUsd: rhUsd } = await getHoldings(user);
+  let rotatedUsd = 0;
+  for (const h of holdings) {
+    const pct =
+      rotate[h.symbol.toUpperCase()] ??
+      (h.units > 0n ? (Number(h.rotatedUnits) / Number(h.units)) * 100 : 0);
+    rotatedUsd += (h.valueUsd * pct) / 100;
+  }
+  return {
+    robinhood: round1((rotatedUsd / totalUsd) * 100),
+    stocks: round1(((rhUsd - rotatedUsd) / totalUsd) * 100),
+  };
+}
+
 async function execute(
   current: Allocation,
   target: Allocation,
   totalUsd: number,
+  rhUsd: number,
+  rotate: Record<string, number> | null,
 ) {
   const actions: ActionRecord[] = [];
   const deltaUsd = (s: keyof Allocation) =>
@@ -353,7 +456,7 @@ async function execute(
     );
   }
 
-  // Directional: no order logic built yet, recorded as a paper position
+  // Directional on Hyperliquid: no order logic built yet, recorded as a paper position
   if (target.directional !== current.directional) {
     await run(
       actions,
@@ -364,15 +467,19 @@ async function execute(
     );
   }
 
-  // Robinhood Chain: simulated leg (MockMorpho)
-  if (target.robinhood !== current.robinhood) {
-    await run(
-      actions,
-      "rh_allocate",
-      { from: current.robinhood, to: target.robinhood },
-      true,
-      async () => null,
-    );
+  // Robinhood Chain: accrue the Morpho yield, rotate stock <-> USDG per stock, credit any gain.
+  if (rhUsd > 0 || current.robinhood > 0) {
+    const user = currentUser() as Address;
+    const stockYield = await getStockYield();
+    const accrual = await accrueMorphoYield(stockYield.supplyApyPct);
+    if (accrual) actions.push(accrual);
+
+    if (rotate) {
+      actions.push(...(await rotateBySymbol(user, rotate)));
+    } else {
+      actions.push(...(await rotateToTarget(user, (target.robinhood / 100) * totalUsd)));
+    }
+    actions.push(...(await creditSurplusYield(user)));
   }
 
   return actions;
@@ -380,13 +487,38 @@ async function execute(
 
 async function proposeAllocation(args: Record<string, unknown>) {
   const book = await getBook();
+  const user = currentUser() as Address;
   const current = book.allocation;
   const target = {} as Allocation;
-  for (const s of STRATEGIES) target[s] = Number(args[s]);
+  for (const s of STRATEGIES) {
+    target[s] = args[s] === undefined ? current[s] : Number(args[s]);
+  }
   const reasoning = String(args.reasoning ?? "");
   const initial = STRATEGIES.every((s) => current[s] === 0);
 
-  const verdict = checkProposal(book.tier, current, target, { initial });
+  const funds = await getFunds(book.totalUsd);
+  const rotate = funds.split && funds.split.rhUsd > 0 ? parseRotate(args.rotate) : null;
+
+  // With a rotate map, the stocks and robinhood percentages are derived from it.
+  if (rotate && funds.usd > 0) {
+    try {
+      const d = await deriveRhTargets(user, rotate, funds.usd);
+      target.robinhood = d.robinhood;
+      target.stocks = d.stocks;
+    } catch {
+      // keep the numbers the model gave
+    }
+  }
+
+  const verdict = checkProposal(book.tier, current, target, {
+    initial,
+    ...(funds.split
+      ? {
+          rhSharePct: funds.split.rhSharePct,
+          hubSharePct: funds.split.hubSharePct,
+        }
+      : {}),
+  });
   if (!verdict.approved) {
     await appendDecision({
       time: new Date().toISOString(),
@@ -401,9 +533,21 @@ async function proposeAllocation(args: Record<string, unknown>) {
     return { approved: false, reasons: verdict.reasons };
   }
 
-  const deployable = await getDeployableUsd(book.totalUsd);
-  const actions = await execute(current, target, deployable.usd);
-  await saveBook({ ...book, allocation: target, totalUsd: deployable.usd });
+  const rhUsd = funds.split?.rhUsd ?? 0;
+  const actions = await execute(current, target, funds.usd, rhUsd, rotate);
+
+  // Store what really happened on Robinhood Chain, not just what was asked for.
+  if (funds.split && funds.usd > 0 && (rhUsd > 0 || current.robinhood > 0)) {
+    try {
+      const h = await getHoldings(user);
+      target.stocks = round1((h.heldUsd / funds.usd) * 100);
+      target.robinhood = round1((h.rotatedUsd / funds.usd) * 100);
+    } catch {
+      // keep the requested numbers
+    }
+  }
+
+  await saveBook({ ...book, allocation: target, totalUsd: funds.usd });
   await appendDecision({
     time: new Date().toISOString(),
     tier: book.tier,
