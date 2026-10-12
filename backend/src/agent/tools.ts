@@ -37,9 +37,69 @@ const DEMO_LEND_MAX_USD = 5;
 const DEMO_HLP_MAX_USD = 5;
 const MIN_LEND_USD = 1;
 
-// Last values observed on the testnet UI; these are variable, not guaranteed.
-const LENDING_APY_PCT = 1.9;
-const HLP_APR_PCT = 4;
+// Used only if the live rate request fails. Last values seen on the testnet UI.
+const FALLBACK_LENDING_APY_PCT = 1.9;
+const FALLBACK_HLP_APR_PCT = 4;
+
+const HL_API =
+  process.env.HL_TESTNET === "false"
+    ? "https://api.hyperliquid.xyz"
+    : "https://api.hyperliquid-testnet.xyz";
+const HLP_VAULT_ADDRESS = "0xa15099a30bbf2e68942d6f4c43d70d04faeab0a0";
+
+async function hlInfo(body: Record<string, unknown>): Promise<any> {
+  const res = await fetch(`${HL_API}/info`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// Live lending supply APY and HLP APR from Hyperliquid's public info API.
+async function getLiveRates() {
+  const [lend, hlp] = await Promise.allSettled([
+    hlInfo({ type: "borrowLendReserveState", token: 0 }),
+    hlInfo({ type: "vaultDetails", vaultAddress: HLP_VAULT_ADDRESS }),
+  ]);
+
+  const supply =
+    lend.status === "fulfilled" ? Number(lend.value?.supplyYearlyRate) : NaN;
+  const util =
+    lend.status === "fulfilled" ? Number(lend.value?.utilization) : NaN;
+  const apr = hlp.status === "fulfilled" ? Number(hlp.value?.apr) : NaN;
+
+  return {
+    lending: Number.isFinite(supply)
+      ? {
+          supplyApyPct: Number((supply * 100).toFixed(2)),
+          utilizationPct: Number.isFinite(util)
+            ? Number((util * 100).toFixed(1))
+            : null,
+          source: "live",
+          note: "USDC supply rate read live from Hyperliquid; variable",
+        }
+      : {
+          supplyApyPct: FALLBACK_LENDING_APY_PCT,
+          utilizationPct: null,
+          source: "fallback",
+          note: "live read failed; last value seen on the testnet Earn page",
+        },
+    hlp: Number.isFinite(apr)
+      ? {
+          aprPct: Number((apr * 100).toFixed(2)),
+          source: "live",
+          note: "read live from Hyperliquid vault details; illiquid, 4-day lockup",
+        }
+      : {
+          aprPct: FALLBACK_HLP_APR_PCT,
+          source: "fallback",
+          note: "live read failed; last value seen on the vault page; illiquid, 4-day lockup",
+        },
+  };
+}
 
 export const toolDeclarations = [
   {
@@ -58,7 +118,7 @@ export const toolDeclarations = [
     type: "function",
     name: "get_market_snapshot",
     description:
-      "Current perp funding rates (annualized %), prices, and 1-year range signals for the given coins, plus the latest observed lending APY and HLP APR.",
+      "Current perp funding rates (annualized %), prices, and 1-year range signals for the given coins, plus the live lending supply APY and HLP APR.",
     parameters: {
       type: "object",
       properties: {
@@ -75,7 +135,7 @@ export const toolDeclarations = [
     type: "function",
     name: "get_portfolio",
     description:
-      "The user's risk tier, deployable funds, current allocation (percent per strategy), the caps for their tier, and live lending and HLP state.",
+      "The user's risk tier, deployable funds (their real deposits in the vaults), current allocation (percent per strategy), the caps for their tier, and live lending and HLP state.",
     parameters: {
       type: "object",
       properties: {
@@ -133,12 +193,34 @@ export const toolDeclarations = [
   },
 ];
 
+// Deployable funds = what the user really deposited (hub + Robinhood principal).
+// Falls back to the stored book value if the on-chain read reports an error.
+async function getDeployableUsd(
+  fallbackUsd: number,
+): Promise<{ usd: number; source: "hub" | "book" }> {
+  try {
+    const w = await getWalletAssets(currentUser());
+    if (((w as any).errors?.length ?? 0) > 0) {
+      return { usd: fallbackUsd, source: "book" };
+    }
+    const d = (w as any).deposited;
+    const usd = Number(d.hubPrincipalUsd) + Number(d.robinhoodPrincipalUsd);
+    if (!Number.isFinite(usd)) return { usd: fallbackUsd, source: "book" };
+    return { usd, source: "hub" };
+  } catch {
+    return { usd: fallbackUsd, source: "book" };
+  }
+}
+
 async function getMarketSnapshot(args: Record<string, unknown>) {
   const coins =
     Array.isArray(args.coins) && args.coins.length
       ? (args.coins as string[])
       : DEFAULT_COINS;
-  const funding = await getFundingSnapshot(coins);
+  const [funding, rates] = await Promise.all([
+    getFundingSnapshot(coins),
+    getLiveRates(),
+  ]);
   const ranges = await Promise.all(
     coins.map((c) =>
       getRangeSignal(c).catch((e) => ({
@@ -150,20 +232,15 @@ async function getMarketSnapshot(args: Record<string, unknown>) {
   return {
     funding,
     ranges,
-    lending: {
-      supplyApyPct: LENDING_APY_PCT,
-      note: "variable; last observed on the testnet Earn page",
-    },
-    hlp: {
-      aprPct: HLP_APR_PCT,
-      note: "30-day APR shown on the vault page; illiquid, 4-day lockup",
-    },
+    lending: rates.lending,
+    hlp: rates.hlp,
   };
 }
 
 async function getPortfolio(args: Record<string, unknown>) {
   const book = await getBook();
   const profile = await getProfile();
+  const deployable = await getDeployableUsd(book.totalUsd);
   const recent = (await readDecisions(3)).map((d) => ({
     time: d.time,
     approved: d.approved,
@@ -180,7 +257,8 @@ async function getPortfolio(args: Record<string, unknown>) {
 
   const base = {
     tier: book.tier,
-    totalUsd: book.totalUsd,
+    totalUsd: deployable.usd,
+    totalUsdSource: deployable.source,
     goal: {
       name: profile.goalName,
       targetUsd: profile.targetUsd,
@@ -323,8 +401,9 @@ async function proposeAllocation(args: Record<string, unknown>) {
     return { approved: false, reasons: verdict.reasons };
   }
 
-  const actions = await execute(current, target, book.totalUsd);
-  await saveBook({ ...book, allocation: target });
+  const deployable = await getDeployableUsd(book.totalUsd);
+  const actions = await execute(current, target, deployable.usd);
+  await saveBook({ ...book, allocation: target, totalUsd: deployable.usd });
   await appendDecision({
     time: new Date().toISOString(),
     tier: book.tier,
