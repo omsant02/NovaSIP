@@ -19,8 +19,10 @@ import {
   checkProposal,
   type Allocation,
 } from "./guardrails.js";
+import { getWalletAssets } from "../chain/walletAssets.js";
 import {
   appendDecision,
+  currentUser,
   getBook,
   getProfile,
   readDecisions,
@@ -40,6 +42,18 @@ const LENDING_APY_PCT = 1.9;
 const HLP_APR_PCT = 4;
 
 export const toolDeclarations = [
+  {
+    type: "function",
+    name: "get_wallet_assets",
+    description:
+      "What the current user holds: funds already deposited in the vaults, USDC on HyperEVM, stock tokens on Robinhood Chain (wallet and vault), and HyperCore spot balances. Read-only; use it to suggest deposits.",
+    parameters: {
+      type: "object",
+      properties: {
+        detail: { type: "boolean", description: "Optional. Unused." },
+      },
+    },
+  },
   {
     type: "function",
     name: "get_market_snapshot",
@@ -157,7 +171,10 @@ async function getPortfolio(args: Record<string, unknown>) {
     reasoning: d.reasoning,
   }));
   const daysLeft = profile.goalDate
-    ? Math.max(0, Math.round((Date.parse(profile.goalDate) - Date.now()) / 86_400_000))
+    ? Math.max(
+        0,
+        Math.round((Date.parse(profile.goalDate) - Date.now()) / 86_400_000),
+      )
     : null;
   const initial = STRATEGIES.every((s) => book.allocation[s] === 0);
 
@@ -330,6 +347,8 @@ export async function executeTool(
       return getMarketSnapshot(args);
     case "get_portfolio":
       return getPortfolio(args);
+    case "get_wallet_assets":
+      return getWalletAssets(currentUser());
     case "propose_allocation":
       return proposeAllocation(args);
     default:

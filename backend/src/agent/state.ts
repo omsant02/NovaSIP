@@ -59,7 +59,7 @@ export function withUser<T>(user: string, fn: () => Promise<T>): Promise<T> {
   return userContext.run(user.toLowerCase(), fn);
 }
 
-function currentUser(): string {
+export function currentUser(): string {
   const u = (userContext.getStore() ?? process.env.WALLET_A ?? "").toLowerCase();
   if (!ADDRESS.test(u)) throw new Error("No valid user address (use withUser or set WALLET_A)");
   return u;
