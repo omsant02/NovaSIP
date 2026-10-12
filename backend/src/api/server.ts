@@ -15,7 +15,7 @@ import { getPerformance } from "../hyperliquid/performance.js";
 import { getStockYield } from "../agent/morpho.js";
 import { getRhStatus } from "../chain/rhStatus.js";
 
-const PORT = Number(process.env.API_PORT ?? 8787);
+const PORT = Number(process.env.PORT ?? process.env.API_PORT ?? 8787);
 const KEEPER_MIN = Number(process.env.KEEPER_INTERVAL_MIN ?? 60);
 const DEMO_USER = (process.env.WALLET_A ?? "").toLowerCase();
 const TIERS = ["conservative", "balanced", "aggressive"];

@@ -3,7 +3,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath } from "node:url";
 import { STRATEGIES, type Allocation, type Tier } from "./guardrails.js";
 
-const DATA_DIR = fileURLToPath(new URL("../../data/", import.meta.url));
+const DATA_DIR = process.env.DATA_DIR
+  ? process.env.DATA_DIR.replace(/\/?$/, "/")
+  : fileURLToPath(new URL("../../data/", import.meta.url));
 const USERS_DIR = DATA_DIR + "users/";
 const LEGACY_BOOK = DATA_DIR + "book.json";
 const LEGACY_LOG = DATA_DIR + "decisions.json";
