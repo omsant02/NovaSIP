@@ -1,6 +1,7 @@
 import "dotenv/config";
 import http from "node:http";
 import { runAgentCycle } from "../agent/agent.js";
+import { runChat } from "../agent/chat.js";
 import {
   getBook,
   getProfile,
@@ -10,6 +11,7 @@ import {
   withUser,
 } from "../agent/state.js";
 import { getHubPosition } from "../chain/vault.js";
+import { getPerformance } from "../hyperliquid/performance.js";
 
 const PORT = Number(process.env.API_PORT ?? 8787);
 const KEEPER_MIN = Number(process.env.KEEPER_INTERVAL_MIN ?? 60);
@@ -66,11 +68,11 @@ function readBody(req: http.IncomingMessage): Promise<any> {
 }
 
 async function getState(user: string) {
-  const [book, profile, decisions] = await withUser(user, async () => [
-    await getBook(),
-    await getProfile(),
-    await readDecisions(20),
-  ] as const);
+  const [book, profile, decisions] = await withUser(
+    user,
+    async () =>
+      [await getBook(), await getProfile(), await readDecisions(20)] as const,
+  );
   let hub: unknown = null;
   try {
     hub = await getHubPosition(user as `0x${string}`);
@@ -89,6 +91,14 @@ async function getState(user: string) {
   };
 }
 
+let perfCache: { at: number; data: unknown } | null = null;
+async function performance() {
+  if (perfCache && Date.now() - perfCache.at < 30_000) return perfCache.data;
+  const data = await getPerformance();
+  perfCache = { at: Date.now(), data };
+  return data;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") return send(res, 204, {});
@@ -100,7 +110,12 @@ const server = http.createServer(async (req, res) => {
       return send(res, 400, { error: "invalid or missing user address" });
     }
 
-    if (req.method === "GET" && path === "/api/state") return send(res, 200, await getState(user));
+    if (req.method === "GET" && path === "/api/state")
+      return send(res, 200, await getState(user));
+
+    if (req.method === "GET" && path === "/api/performance") {
+      return send(res, 200, await performance());
+    }
 
     if (req.method === "GET" && path === "/api/decisions") {
       return send(res, 200, await withUser(user, () => readDecisions(50)));
@@ -113,9 +128,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && path === "/api/profile") {
       const body = await readBody(req);
       const patch: Record<string, unknown> = {};
-      if (typeof body.goalName === "string") patch.goalName = body.goalName.trim().slice(0, 60);
-      if (typeof body.targetUsd === "number" && body.targetUsd > 0) patch.targetUsd = body.targetUsd;
-      if ("goalDate" in body && (body.goalDate === null || typeof body.goalDate === "string")) {
+      if (typeof body.goalName === "string")
+        patch.goalName = body.goalName.trim().slice(0, 60);
+      if (typeof body.targetUsd === "number" && body.targetUsd > 0)
+        patch.targetUsd = body.targetUsd;
+      if (
+        "goalDate" in body &&
+        (body.goalDate === null || typeof body.goalDate === "string")
+      ) {
         patch.goalDate = body.goalDate;
       }
       if (TIERS.includes(body.tier)) patch.tier = body.tier;
@@ -123,7 +143,39 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, profile);
     }
 
-    if (req.method === "POST" && path === "/api/run") return send(res, 200, await cycle(user));
+    if (req.method === "POST" && path === "/api/chat") {
+      const body = await readBody(req);
+      const messages = (Array.isArray(body.messages) ? body.messages : [])
+        .filter(
+          (m: any) =>
+            (m?.role === "user" || m?.role === "assistant") &&
+            typeof m?.text === "string",
+        )
+        .slice(-20)
+        .map((m: any) => ({ role: m.role, text: m.text.slice(0, 2000) }));
+      if (
+        messages.length === 0 ||
+        messages[messages.length - 1].role !== "user"
+      ) {
+        return send(res, 400, {
+          error: "messages must end with a user message",
+        });
+      }
+      // A follow-up is pinned to one key. If that key hangs, the whole chat is
+      // retried once; the failed key is already on cooldown, so the retry
+      // starts on a different key.
+      const chat = async () => {
+        try {
+          return await runChat(messages);
+        } catch {
+          return await runChat(messages);
+        }
+      };
+      return send(res, 200, await withUser(user, chat));
+    }
+
+    if (req.method === "POST" && path === "/api/run")
+      return send(res, 200, await cycle(user));
 
     send(res, 404, { error: "not found" });
   } catch (e) {

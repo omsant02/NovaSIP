@@ -75,12 +75,47 @@ export async function fetchState(user?: string): Promise<NovaState> {
 
 export async function saveProfile(
   user: string,
-  profile: Pick<Profile, "goalName" | "targetUsd" | "goalDate" | "tier">,
+  patch: {
+    goalName?: string;
+    targetUsd?: number;
+    goalDate?: string | null;
+    tier?: Tier;
+  },
 ): Promise<void> {
   const res = await fetch(`${API_URL}/api/profile?user=${user}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(profile),
+    body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Saving your goal failed (${res.status})`);
+}
+
+export async function runNova(
+  user: string,
+): Promise<{ summary?: string; error?: string; skipped?: boolean }> {
+  const res = await fetch(`${API_URL}/api/run?user=${user}`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Run failed (${res.status})`);
+  return res.json();
+}
+
+export type StrategyPerf = {
+  capitalUsd: number | null;
+  pnlUsd: number | null;
+  returnPct: number | null;
+  source: string;
+};
+
+export type Performance = {
+  carry: StrategyPerf;
+  lending: StrategyPerf;
+  hlp: StrategyPerf;
+  updatedAt: string;
+};
+
+export async function fetchPerformance(): Promise<Performance> {
+  const res = await fetch(`${API_URL}/api/performance`);
+  if (!res.ok) throw new Error(`Performance request failed (${res.status})`);
+  return res.json();
 }

@@ -7,7 +7,8 @@ const keys = (process.env.GEMINI_API_KEYS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-if (keys.length === 0) throw new Error("GEMINI_API_KEYS missing in backend/.env");
+if (keys.length === 0)
+  throw new Error("GEMINI_API_KEYS missing in backend/.env");
 const clients = keys.map((apiKey) => new GoogleGenAI({ apiKey }));
 
 const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite";
@@ -54,7 +55,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`request timed out after ${ms / 1000}s`)), ms);
+    timer = setTimeout(
+      () => reject(new Error(`request timed out after ${ms / 1000}s`)),
+      ms,
+    );
   });
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
@@ -69,40 +73,78 @@ function markFailed(k: number, model: string, e: unknown) {
   cooldownUntil.set(pairId(k, model), Date.now() + ms);
 }
 
-type Pin = { client: any; model: string; k: number };
+export type Pin = { client: any; model: string; k: number };
 
-// First request of a cycle: try every model x key (skipping pairs on cooldown) until one works.
-async function firstRequest(
+const HEDGE_MS = 4_000;
+let lastGood: string | null = null; // the key x model pair that last answered
+
+// First request of a cycle. Starts with the pair that last worked; if it has not
+// answered within HEDGE_MS, the next pair is started in parallel and the first
+// answer wins. Slow or failing pairs go on cooldown.
+export async function firstRequest(
   params: Record<string, unknown>,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<{ interaction: any; pin: Pin }> {
   const models = [PRIMARY_MODEL, ...FALLBACKS.filter((m) => m !== PRIMARY_MODEL)];
-  const allPairs: Array<[number, string]> = [];
-  for (const model of models) for (let k = 0; k < clients.length; k++) allPairs.push([k, model]);
+  const all: Array<[number, string]> = [];
+  for (const model of models) for (let k = 0; k < clients.length; k++) all.push([k, model]);
 
-  let lastError: unknown;
-  for (let round = 0; round < 2; round++) {
-    let pairs = allPairs.filter(([k, m]) => !onCooldown(k, m));
-    if (pairs.length === 0) pairs = allPairs; // everything cooling down: try anyway
-    for (const [k, model] of pairs) {
-      try {
-        const interaction = await withTimeout(
-          (clients[k] as any).interactions.create({ ...params, model }),
-          REQUEST_TIMEOUT_MS,
-        );
-        return { interaction, pin: { client: clients[k], model, k } };
-      } catch (e) {
-        lastError = e;
-        markFailed(k, model, e);
-        console.log(`key#${k + 1} ${model} failed: ${errMsg(e).slice(0, 100)}`);
-      }
-    }
-    await sleep(1500 + Math.random() * 500);
-  }
-  throw lastError;
+  let pairs = all.filter(([k, m]) => !onCooldown(k, m));
+  if (pairs.length === 0) pairs = all; // everything cooling down: try anyway
+  pairs.sort(
+    (a, b) =>
+      Number(pairId(b[0], b[1]) === lastGood) - Number(pairId(a[0], a[1]) === lastGood),
+  );
+
+  return new Promise((resolve, reject) => {
+    let started = 0;
+    let failed = 0;
+    let done = false;
+    let lastError: unknown;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const startNext = () => {
+      if (done || started >= pairs.length) return;
+      clearTimeout(timer);
+      const [k, model] = pairs[started++];
+      const t0 = Date.now();
+      withTimeout(
+        (clients[k] as any).interactions.create({ ...params, model }),
+        timeoutMs,
+      )
+        .then((interaction) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          lastGood = pairId(k, model);
+          console.log(`key#${k + 1} ${model} ok in ${Date.now() - t0}ms`);
+          resolve({ interaction, pin: { client: clients[k], model, k } });
+        })
+        .catch((e) => {
+          lastError = e;
+          markFailed(k, model, e);
+          console.log(`key#${k + 1} ${model} failed: ${errMsg(e).slice(0, 100)}`);
+          failed++;
+          if (done) return;
+          if (failed >= pairs.length) {
+            done = true;
+            clearTimeout(timer);
+            reject(lastError);
+          } else {
+            startNext();
+          }
+        });
+      timer = setTimeout(startNext, HEDGE_MS);
+    };
+    startNext();
+  });
 }
 
 // Later turns must stay on the same key and model: the conversation state lives in that project.
-async function followUp(params: Record<string, unknown>, pin: Pin): Promise<any> {
+export async function followUp(
+  params: Record<string, unknown>,
+  pin: Pin,
+): Promise<any> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {

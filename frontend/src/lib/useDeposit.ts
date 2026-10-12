@@ -27,11 +27,11 @@ export function useDeposit() {
   const [step, setStep] = useState<DepositStep>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  async function run(amountUsd: number, tier: Tier) {
+  async function run(amountUsd: number, tier: Tier): Promise<boolean> {
     if (!address || !publicClient) {
       setError("Wallet not ready");
       setStep("error");
-      return;
+      return false;
     }
     setError(null);
     try {
@@ -65,10 +65,12 @@ export function useDeposit() {
       await publicClient.waitForTransactionReceipt({ hash: depositHash });
 
       setStep("done");
+      return true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg.split("\n")[0]);
       setStep("error");
+      return false;
     }
   }
 

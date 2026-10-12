@@ -41,3 +41,7 @@ export function money(n: number): string {
     maximumFractionDigits: 2,
   }).format(n);
 }
+
+export function signedMoney(n: number): string {
+  return `${n >= 0 ? "+" : "-"}${money(Math.abs(n))}`;
+}

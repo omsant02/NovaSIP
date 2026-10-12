@@ -1,18 +1,19 @@
 "use client";
 
-import { useState } from "react";
 import { useAccount } from "wagmi";
 import { useNovaState } from "@/lib/useNovaState";
+import { usePerformance } from "@/lib/usePerformance";
+import { estimatePnl } from "@/lib/pnl";
 import { fromUsdc } from "@/lib/api";
 import { AllocationCard } from "@/components/app/AllocationCard";
 import { ConnectButton } from "@/components/app/ConnectButton";
-import { DepositModal } from "@/components/app/DepositModal";
 import { EmptyState } from "@/components/app/EmptyState";
+import { GoalCard } from "@/components/app/GoalCard";
 
 export function Dashboard() {
   const { isConnected, status } = useAccount();
   const { data, error, isLoading } = useNovaState();
-  const [depositOpen, setDepositOpen] = useState(false);
+  const { data: perf } = usePerformance();
 
   if (status === "connecting" || status === "reconnecting") {
     return <p className="text-muted">Checking your wallet...</p>;
@@ -44,41 +45,25 @@ export function Dashboard() {
   const total =
     fromUsdc(data.hub.hubPrincipal) + fromUsdc(data.hub.rhPrincipal);
 
-  const modal = depositOpen && (
-    <DepositModal onClose={() => setDepositOpen(false)} />
-  );
-
   if (total === 0) {
     return (
-      <>
-        <EmptyState
-          title="Make your first deposit"
-          body="Pick a goal and a risk level, deposit test USDC, and Nova starts working."
-        >
-          <button
-            onClick={() => setDepositOpen(true)}
-            className="rounded-full bg-gold px-6 py-3 font-medium text-gold-ink hover:opacity-90"
-          >
-            Set a goal and deposit
-          </button>
-        </EmptyState>
-        {modal}
-      </>
+      <EmptyState
+        title="Let's set your first goal"
+        body="Tell Nova what you're saving for in the chat. It will suggest a plan and send the deposit to your wallet."
+      />
     );
   }
 
+  const pnl = estimatePnl(data.book.allocation, total, perf);
+
   return (
-    <div className="grid gap-6">
-      <div className="flex justify-end">
-        <button
-          onClick={() => setDepositOpen(true)}
-          className="rounded-full border border-line-strong px-4 py-2 text-sm hover:bg-field"
-        >
-          Add money
-        </button>
-      </div>
-      <AllocationCard allocation={data.book.allocation} total={total} />
-      {modal}
+    <div className="grid content-start gap-6">
+      <GoalCard profile={data.profile} total={total} pnl={pnl.total} />
+      <AllocationCard
+        allocation={data.book.allocation}
+        total={total}
+        pnl={pnl.byStrategy}
+      />
     </div>
   );
 }
