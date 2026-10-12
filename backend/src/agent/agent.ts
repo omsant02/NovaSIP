@@ -10,12 +10,15 @@ const keys = (process.env.GEMINI_API_KEYS ?? "")
 if (keys.length === 0) throw new Error("GEMINI_API_KEYS missing in backend/.env");
 const clients = keys.map((apiKey) => new GoogleGenAI({ apiKey }));
 
-const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
+const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite";
 const FALLBACKS = (process.env.GEMINI_FALLBACK_MODELS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 const MAX_TURNS = 8;
+const REQUEST_TIMEOUT_MS = 25_000;
+const SHORT_COOLDOWN_MS = 60_000;
+const LONG_COOLDOWN_MS = 10 * 60_000;
 
 const SYSTEM_PROMPT = `You are NovaSIP's portfolio agent. You manage a user's goal-based savings plan by allocating their deployable funds across five strategies:
 - carry: delta-neutral ETH carry on Hyperliquid (earns funding; compare its annualized funding to lending).
@@ -35,36 +38,62 @@ Each cycle:
 Only use numbers returned by the tools. Never invent rates. On the first deployment (isInitialDeployment is true), build a diversified allocation within the caps; the per-cycle move limit does not apply to it, so do not cite it as a reason for holding cash.
 When finished, reply with a two or three sentence summary for the user.`;
 
+function errMsg(e: unknown) {
+  return e instanceof Error ? e.message : String(e);
+}
+
 function isRetryable(e: unknown) {
-  const msg = e instanceof Error ? e.message : String(e);
-  return /429|RESOURCE_EXHAUSTED|503|UNAVAILABLE|500|408|timeout|ECONNRESET/i.test(msg);
+  return /429|RESOURCE_EXHAUSTED|503|UNAVAILABLE|500|408|timeout|timed out|ECONNRESET|unusable|fetch failed/i.test(
+    errMsg(e),
+  );
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Pin = { client: any; model: string };
+// Reject if a request takes longer than ms, so a hung call cannot freeze a cycle.
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`request timed out after ${ms / 1000}s`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 
-// First request of a cycle: try every model x key until one works.
+// Failover memory: key x model pairs that just failed are skipped until their cooldown ends.
+const cooldownUntil = new Map<string, number>();
+const pairId = (k: number, model: string) => `${k}:${model}`;
+const onCooldown = (k: number, model: string) =>
+  (cooldownUntil.get(pairId(k, model)) ?? 0) > Date.now();
+function markFailed(k: number, model: string, e: unknown) {
+  const ms = isRetryable(e) ? SHORT_COOLDOWN_MS : LONG_COOLDOWN_MS;
+  cooldownUntil.set(pairId(k, model), Date.now() + ms);
+}
+
+type Pin = { client: any; model: string; k: number };
+
+// First request of a cycle: try every model x key (skipping pairs on cooldown) until one works.
 async function firstRequest(
   params: Record<string, unknown>,
 ): Promise<{ interaction: any; pin: Pin }> {
   const models = [PRIMARY_MODEL, ...FALLBACKS.filter((m) => m !== PRIMARY_MODEL)];
+  const allPairs: Array<[number, string]> = [];
+  for (const model of models) for (let k = 0; k < clients.length; k++) allPairs.push([k, model]);
+
   let lastError: unknown;
   for (let round = 0; round < 2; round++) {
-    for (const model of models) {
-      for (let k = 0; k < clients.length; k++) {
-        try {
-          const interaction = await (clients[k] as any).interactions.create({
-            ...params,
-            model,
-          });
-          return { interaction, pin: { client: clients[k], model } };
-        } catch (e) {
-          lastError = e;
-          console.log(
-            `key#${k + 1} ${model} failed: ${e instanceof Error ? e.message.slice(0, 100) : e}`,
-          );
-        }
+    let pairs = allPairs.filter(([k, m]) => !onCooldown(k, m));
+    if (pairs.length === 0) pairs = allPairs; // everything cooling down: try anyway
+    for (const [k, model] of pairs) {
+      try {
+        const interaction = await withTimeout(
+          (clients[k] as any).interactions.create({ ...params, model }),
+          REQUEST_TIMEOUT_MS,
+        );
+        return { interaction, pin: { client: clients[k], model, k } };
+      } catch (e) {
+        lastError = e;
+        markFailed(k, model, e);
+        console.log(`key#${k + 1} ${model} failed: ${errMsg(e).slice(0, 100)}`);
       }
     }
     await sleep(1500 + Math.random() * 500);
@@ -77,13 +106,20 @@ async function followUp(params: Record<string, unknown>, pin: Pin): Promise<any>
   let lastError: unknown;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      return await pin.client.interactions.create({ ...params, model: pin.model });
+      return await withTimeout(
+        pin.client.interactions.create({ ...params, model: pin.model }),
+        REQUEST_TIMEOUT_MS,
+      );
     } catch (e) {
       lastError = e;
+      console.log(
+        `follow-up key#${pin.k + 1} ${pin.model} attempt ${attempt + 1} failed: ${errMsg(e).slice(0, 100)}`,
+      );
       if (!isRetryable(e)) break;
       await sleep(1000 * 2 ** attempt + Math.random() * 500);
     }
   }
+  markFailed(pin.k, pin.model, lastError);
   throw lastError;
 }
 
