@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAccount } from "wagmi";
 import { useChat } from "@/lib/useChat";
 import { ConnectButton } from "@/components/app/ConnectButton";
+import ReactMarkdown from "react-markdown";
 
 const INTRO =
   "Hi, I'm Nova. I help you reach a savings goal with yield, and I explain every move I make. Connect your wallet and we can start.";
@@ -12,15 +13,42 @@ function Bubble({ role, text }: { role: "user" | "assistant"; text: string }) {
   const mine = role === "user";
   return (
     <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-      <p
-        className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+      <div
+        className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
           mine
-            ? "bg-gold text-gold-ink"
+            ? "whitespace-pre-wrap bg-gold text-gold-ink"
             : "border border-line bg-deep text-starlight"
         }`}
       >
-        {text}
-      </p>
+        {mine ? (
+          text
+        ) : (
+          <ReactMarkdown
+            components={{
+              p: ({ children }) => (
+                <p className="mb-2 last:mb-0">{children}</p>
+              ),
+              ul: ({ children }) => (
+                <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">
+                  {children}
+                </ul>
+              ),
+              ol: ({ children }) => (
+                <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">
+                  {children}
+                </ol>
+              ),
+              strong: ({ children }) => (
+                <strong className="font-semibold text-starlight">
+                  {children}
+                </strong>
+              ),
+            }}
+          >
+            {text}
+          </ReactMarkdown>
+        )}
+      </div>
     </div>
   );
 }

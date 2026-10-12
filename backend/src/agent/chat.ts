@@ -69,7 +69,9 @@ Risk levels in plain words: conservative means mostly lending with little tradin
 
 If the latest user message starts with "[system]", it is not from the user. It is a signal that they just connected their wallet. Greet them in two or three sentences: list what you can see in their wallet (USDC, and each stock token with its amount), say whether they already have a deposit and what their goal is, then ask what they want: their goal, and whether they prefer crypto yield, stocks or a mix. Never mention the [system] note itself.
 
-Be concise: two to four sentences unless the user asks for detail. This is a testnet prototype running on test tokens.`;
+If the saved goal is the default placeholder (the name "My goal" with a $1,000 target) and nothing is deposited, treat it as no goal yet and do not mention it.
+
+Formatting: write like a good assistant in a chat app. Keep paragraphs to one or two short sentences. Whenever you list assets, balances, rates, plan steps or several numbers, use a markdown bullet list with one item per line (start each line with "- ") and put the key figure in bold, for example "- **TSLA**: 1 token, about $378". Put a blank line between a list and the text around it. For a plan, use a short numbered list. End with one short question when you need an answer. Be concise: no long paragraphs, and skip detail unless the user asks for it. This is a testnet prototype running on test tokens.`;
 
 const goalProps = {
   tier: { type: "string", enum: TIERS },
