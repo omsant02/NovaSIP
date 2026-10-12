@@ -5,20 +5,20 @@ import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RHChainVault} from "../src/RHChainVault.sol";
 import {MockMorpho} from "../src/mocks/MockMorpho.sol";
+import {MockUSDG} from "../src/mocks/MockUSDG.sol";
+import {MockExchange} from "../src/mocks/MockExchange.sol";
 
-/// Deploys one MockMorpho per stock token, then RHChainVault, to Robinhood Chain
-/// testnet. Reads everything from contracts/.env.
+/// Deploys to Robinhood Chain testnet: MockUSDG, a MockMorpho vault over it,
+/// MockExchange, and RHChainVault. Mints USDG to the exchange and the operator.
+/// Reads PRIVATE_KEY, OPERATOR and TOKEN_* from contracts/.env.
 contract DeployRH is Script {
+    uint256 constant EXCHANGE_USDG = 1_000_000e6;
+    uint256 constant OPERATOR_USDG = 100_000e6;
+
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(pk);
-
-        string[] memory names = new string[](5);
-        names[0] = "TSLA";
-        names[1] = "AMZN";
-        names[2] = "AMD";
-        names[3] = "NFLX";
-        names[4] = "PLTR";
+        address operator = vm.envAddress("OPERATOR");
 
         address[] memory tokens = new address[](5);
         tokens[0] = vm.envAddress("TOKEN_TSLA");
@@ -29,22 +29,23 @@ contract DeployRH is Script {
 
         vm.startBroadcast(pk);
 
-        address[] memory strategies = new address[](5);
-        for (uint256 i = 0; i < 5; i++) {
-            MockMorpho m = new MockMorpho(
-                IERC20(tokens[i]),
-                string.concat("Mock Morpho ", names[i]),
-                string.concat("mm", names[i])
-            );
-            strategies[i] = address(m);
-            console.log(string.concat("MockMorpho ", names[i], ":"), address(m));
-        }
+        MockUSDG usdg = new MockUSDG(deployer);
+        MockMorpho morpho = new MockMorpho(IERC20(address(usdg)), "Mock Morpho USDG", "mmUSDG");
+        MockExchange exchange = new MockExchange(deployer, IERC20(address(usdg)), operator);
+        RHChainVault vault = new RHChainVault(
+            deployer, operator, tokens, address(exchange), address(usdg), address(morpho)
+        );
 
-        RHChainVault vault = new RHChainVault(deployer, vm.envAddress("OPERATOR"), tokens, strategies);
+        usdg.mint(address(exchange), EXCHANGE_USDG);
+        usdg.mint(operator, OPERATOR_USDG);
 
         vm.stopBroadcast();
 
-        console.log("RHChainVault deployed at:", address(vault));
-        console.log("owner:", deployer);
+        console.log("MockUSDG:      ", address(usdg));
+        console.log("MockMorpho:    ", address(morpho));
+        console.log("MockExchange:  ", address(exchange));
+        console.log("RHChainVault:  ", address(vault));
+        console.log("owner:         ", deployer);
+        console.log("operator:      ", operator);
     }
 }

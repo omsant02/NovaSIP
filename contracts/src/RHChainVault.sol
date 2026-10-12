@@ -7,26 +7,43 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
+interface IExchange {
+    function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minOut)
+        external
+        returns (uint256 amountOut);
+}
+
 /// @title RHChainVault
-/// @notice Custody, books and strategy movement for tokenized stocks on Robinhood
-///         Chain. Spoke of the NovaSIP hub (NovaSIPVault on HyperEVM). The two
-///         contracts never call each other; the operator mirrors events into the hub
-///         with recordRHDeposit / recordRHWithdrawal.
+/// @notice Custody, books and rotation for tokenized stocks on Robinhood Chain. Spoke
+///         of the NovaSIP hub (NovaSIPVault on HyperEVM). The two contracts never call
+///         each other; the operator mirrors events into the hub with
+///         recordRHDeposit / recordRHWithdrawal.
+///
+/// How rotation works:
+///  - Users deposit allowed stock tokens. Books stay denominated in the stock token.
+///  - The operator can sell idle stock for USDG on the fixed exchange (sellToUsdg),
+///    park that USDG in the fixed ERC-4626 USDG vault (parkUsdg) to earn yield, take
+///    it back out (unparkUsdg), and buy the stock back (buyBackStock).
+///  - buyBackStock reverts unless the vault receives at least as many stock units as
+///    the principal it restores. Users' stock principal therefore never shrinks;
+///    anything extra (cheaper re-entry plus USDG yield) becomes surplus stock, which
+///    the operator can recognise as yield and credit to users.
 ///
 /// Trust model:
-///  - Token list and one strategy vault per token are fixed at deployment.
+///  - Token list, exchange, USDG and USDG vault are fixed at deployment.
 ///    No admin withdraw, no pause.
 ///  - Tokens leave this contract only to (a) the user who owns them, or (b) the fixed
-///    ERC-4626 strategy of that token (operator: allocate). Nowhere else.
-///  - The operator can recall tokens from the strategy, recognise real gains as yield
-///    (never more than the surplus that actually exists), and credit that yield.
+///    exchange (stock for USDG) or the fixed USDG vault. Nowhere else.
+///  - The operator can never take more stock out than idle user principal, and can
+///    only recognise yield out of surplus that actually exists.
 ///  - The owner can only change the operator.
 ///
 /// Known limits:
-///  - Strategy losses are not reported: if the strategy returns less than was put in,
-///    users' books still show the full principal.
-///  - Recall returns principal first; gains appear as surplus only after all deployed
-///    principal of that token is back (conservative on purpose).
+///  - The no-loss rule is only as strong as the exchange price. On testnet the
+///    exchange price is set by our operator from real market data; on mainnet the
+///    same vault would swap through a real DEX.
+///  - While stock is rotated, withdrawals of that stock revert until the operator
+///    buys it back. If the price rises after a sale, the vault waits in USDG.
 ///  - Accounting is pooled per token, not per user.
 ///  - Tokens that rebase or charge transfer fees are credited by the amount actually
 ///    received; later rebases are not reflected. Tokens sent here by mistake are stuck.
@@ -39,16 +56,24 @@ contract RHChainVault is Ownable, ReentrancyGuard {
         Aggressive
     }
 
+    // ───────────── fixed at deployment ─────────────
+    IExchange public immutable exchange;
+    IERC20 public immutable usdg;
+    IERC4626 public immutable usdgVault;
+
     // ───────────── state ─────────────
     address public operator;
     address[] private _tokens;
     mapping(address => bool) public isAllowed;
-    mapping(address => address) public strategyOf; // token => its ERC-4626 strategy
 
     mapping(address => mapping(address => uint256)) public balanceOf; // user => token => held
     mapping(address => uint256) public totalBalance; // token => sum of user balances
-    mapping(address => uint256) public deployed; // token => principal currently in the strategy
     mapping(address => uint256) public depositCount; // user => number of deposits
+
+    // rotation, per stock token
+    mapping(address => uint256) public rotatedStock; // stock units currently sold
+    mapping(address => uint256) public usdgIdle; // USDG held for this token, not parked
+    mapping(address => uint256) public parkedShares; // USDG-vault shares held for this token
 
     mapping(address => uint256) public yieldReserve; // token => set aside for yield, not yet claimed
     mapping(address => uint256) public totalYieldOwed; // token => credited, not yet claimed
@@ -59,25 +84,31 @@ contract RHChainVault is Ownable, ReentrancyGuard {
     error ZeroAddress();
     error ZeroAmount();
     error NoTokens();
-    error LengthMismatch();
     error DuplicateToken();
-    error StrategyAssetMismatch();
+    error TokenIsUsdg();
+    error UsdgVaultAssetMismatch();
     error TokenNotAllowed();
     error InsufficientBalance();
     error NotOperator();
     error YieldNotFunded();
     error NothingToClaim();
-    error DeployExceedsPrincipal();
-    error DeployDidNotMoveFunds();
-    error FundsDeployed();
+    error FundsRotated();
     error NoSurplus();
+    error RotateExceedsPrincipal();
+    error InsufficientUsdg();
+    error InsufficientShares();
+    error SwapDidNotMoveFunds();
+    error RestoreExceedsRotated();
+    error BuyBackBelowPrincipal();
 
     // ───────────── events ─────────────
     event OperatorSet(address indexed operator);
     event Deposited(address indexed user, address indexed token, uint256 amount, RiskTier tier, uint256 depositId);
     event Withdrawn(address indexed user, address indexed token, uint256 amount);
-    event Allocated(address indexed token, uint256 amount, uint256 shares);
-    event Recalled(address indexed token, uint256 shares, uint256 received, uint256 principalBack);
+    event Rotated(address indexed token, uint256 stockSold, uint256 usdgReceived);
+    event Parked(address indexed token, uint256 usdgAmount, uint256 shares);
+    event Unparked(address indexed token, uint256 shares, uint256 usdgReceived);
+    event BoughtBack(address indexed token, uint256 usdgSpent, uint256 stockReceived, uint256 stockRestored);
     event YieldFunded(address indexed token, uint256 amount);
     event YieldRecognized(address indexed token, uint256 amount);
     event YieldCredited(address indexed user, address indexed token, uint256 amount);
@@ -92,20 +123,27 @@ contract RHChainVault is Ownable, ReentrancyGuard {
         address initialOwner,
         address operator_,
         address[] memory tokens_,
-        address[] memory strategies_
+        address exchange_,
+        address usdg_,
+        address usdgVault_
     ) Ownable(initialOwner) {
-        if (operator_ == address(0)) revert ZeroAddress();
+        if (operator_ == address(0) || exchange_ == address(0) || usdg_ == address(0) || usdgVault_ == address(0)) {
+            revert ZeroAddress();
+        }
         if (tokens_.length == 0) revert NoTokens();
-        if (tokens_.length != strategies_.length) revert LengthMismatch();
+        if (IERC4626(usdgVault_).asset() != usdg_) revert UsdgVaultAssetMismatch();
+
         operator = operator_;
+        exchange = IExchange(exchange_);
+        usdg = IERC20(usdg_);
+        usdgVault = IERC4626(usdgVault_);
+
         for (uint256 i = 0; i < tokens_.length; i++) {
             address t = tokens_[i];
-            address s = strategies_[i];
-            if (t == address(0) || s == address(0)) revert ZeroAddress();
+            if (t == address(0)) revert ZeroAddress();
+            if (t == usdg_) revert TokenIsUsdg();
             if (isAllowed[t]) revert DuplicateToken();
-            if (IERC4626(s).asset() != t) revert StrategyAssetMismatch();
             isAllowed[t] = true;
-            strategyOf[t] = s;
             _tokens.push(t);
         }
         emit OperatorSet(operator_);
@@ -131,14 +169,14 @@ contract RHChainVault is Ownable, ReentrancyGuard {
     }
 
     /// @notice Take your tokens back, up to your balance. Reverts if too much of the
-    ///         token is deployed in the strategy; the operator must recall first.
+    ///         token is rotated into USDG; the operator must buy it back first.
     function withdraw(address token, uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
         uint256 bal = balanceOf[msg.sender][token];
         if (amount > bal) revert InsufficientBalance();
 
         uint256 newTotal = totalBalance[token] - amount;
-        if (newTotal < deployed[token]) revert FundsDeployed();
+        if (newTotal < rotatedStock[token]) revert FundsRotated();
 
         balanceOf[msg.sender][token] = bal - amount;
         totalBalance[token] = newTotal;
@@ -158,40 +196,92 @@ contract RHChainVault is Ownable, ReentrancyGuard {
         emit YieldClaimed(msg.sender, token, owed);
     }
 
-    // ═════════════ operator functions ═════════════
+    // ═════════════ operator: rotation ═════════════
 
-    /// @notice Move idle user principal of a token into that token's fixed strategy.
-    function allocate(address token, uint256 amount) external onlyOperator nonReentrant {
-        address strategy = strategyOf[token];
-        if (strategy == address(0)) revert TokenNotAllowed();
+    /// @notice Sell idle stock for USDG on the fixed exchange.
+    function sellToUsdg(address token, uint256 amount, uint256 minUsdgOut) external onlyOperator nonReentrant {
+        if (!isAllowed[token]) revert TokenNotAllowed();
         if (amount == 0) revert ZeroAmount();
-        if (deployed[token] + amount > totalBalance[token]) revert DeployExceedsPrincipal();
+        if (rotatedStock[token] + amount > totalBalance[token]) revert RotateExceedsPrincipal();
 
-        uint256 balBefore = IERC20(token).balanceOf(address(this));
-        deployed[token] += amount;
-        IERC20(token).forceApprove(strategy, amount);
-        uint256 shares = IERC4626(strategy).deposit(amount, address(this));
-        IERC20(token).forceApprove(strategy, 0);
-        if (balBefore - IERC20(token).balanceOf(address(this)) != amount) revert DeployDidNotMoveFunds();
+        uint256 stockBefore = IERC20(token).balanceOf(address(this));
+        uint256 usdgBefore = usdg.balanceOf(address(this));
 
-        emit Allocated(token, amount, shares);
+        IERC20(token).forceApprove(address(exchange), amount);
+        exchange.swap(token, address(usdg), amount, minUsdgOut);
+        IERC20(token).forceApprove(address(exchange), 0);
+
+        if (stockBefore - IERC20(token).balanceOf(address(this)) != amount) revert SwapDidNotMoveFunds();
+        uint256 got = usdg.balanceOf(address(this)) - usdgBefore;
+        if (got == 0) revert ZeroAmount();
+
+        rotatedStock[token] += amount;
+        usdgIdle[token] += got;
+        emit Rotated(token, amount, got);
     }
 
-    /// @notice Pull tokens back out of the strategy. Principal is returned first; anything
-    ///         above the deployed principal becomes surplus (see recognizeYield).
-    function recall(address token, uint256 shares) external onlyOperator nonReentrant {
-        address strategy = strategyOf[token];
-        if (strategy == address(0)) revert TokenNotAllowed();
+    /// @notice Put idle USDG (held for a stock token) into the USDG vault to earn yield.
+    function parkUsdg(address token, uint256 amount) external onlyOperator nonReentrant {
+        if (!isAllowed[token]) revert TokenNotAllowed();
+        if (amount == 0) revert ZeroAmount();
+        if (amount > usdgIdle[token]) revert InsufficientUsdg();
+
+        uint256 usdgBefore = usdg.balanceOf(address(this));
+        usdgIdle[token] -= amount;
+        usdg.forceApprove(address(usdgVault), amount);
+        uint256 shares = usdgVault.deposit(amount, address(this));
+        usdg.forceApprove(address(usdgVault), 0);
+        if (usdgBefore - usdg.balanceOf(address(this)) != amount) revert SwapDidNotMoveFunds();
+
+        parkedShares[token] += shares;
+        emit Parked(token, amount, shares);
+    }
+
+    /// @notice Take USDG back out of the USDG vault. Any yield lands in the idle USDG.
+    function unparkUsdg(address token, uint256 shares) external onlyOperator nonReentrant {
+        if (!isAllowed[token]) revert TokenNotAllowed();
         if (shares == 0) revert ZeroAmount();
+        if (shares > parkedShares[token]) revert InsufficientShares();
 
-        uint256 balBefore = IERC20(token).balanceOf(address(this));
-        IERC4626(strategy).redeem(shares, address(this), address(this));
-        uint256 received = IERC20(token).balanceOf(address(this)) - balBefore;
+        uint256 usdgBefore = usdg.balanceOf(address(this));
+        parkedShares[token] -= shares;
+        usdgVault.redeem(shares, address(this), address(this));
+        uint256 received = usdg.balanceOf(address(this)) - usdgBefore;
 
-        uint256 principalBack = received < deployed[token] ? received : deployed[token];
-        deployed[token] -= principalBack;
-        emit Recalled(token, shares, received, principalBack);
+        usdgIdle[token] += received;
+        emit Unparked(token, shares, received);
     }
+
+    /// @notice Spend idle USDG to buy the stock back. Reverts unless at least
+    ///         `stockToRestore` units come back; that amount of principal is restored
+    ///         and anything extra becomes surplus.
+    function buyBackStock(address token, uint256 usdgAmount, uint256 stockToRestore)
+        external
+        onlyOperator
+        nonReentrant
+    {
+        if (!isAllowed[token]) revert TokenNotAllowed();
+        if (usdgAmount == 0 || stockToRestore == 0) revert ZeroAmount();
+        if (usdgAmount > usdgIdle[token]) revert InsufficientUsdg();
+        if (stockToRestore > rotatedStock[token]) revert RestoreExceedsRotated();
+
+        uint256 stockBefore = IERC20(token).balanceOf(address(this));
+        uint256 usdgBefore = usdg.balanceOf(address(this));
+
+        usdg.forceApprove(address(exchange), usdgAmount);
+        exchange.swap(address(usdg), token, usdgAmount, stockToRestore);
+        usdg.forceApprove(address(exchange), 0);
+
+        if (usdgBefore - usdg.balanceOf(address(this)) != usdgAmount) revert SwapDidNotMoveFunds();
+        uint256 received = IERC20(token).balanceOf(address(this)) - stockBefore;
+        if (received < stockToRestore) revert BuyBackBelowPrincipal();
+
+        usdgIdle[token] -= usdgAmount;
+        rotatedStock[token] -= stockToRestore;
+        emit BoughtBack(token, usdgAmount, received, stockToRestore);
+    }
+
+    // ═════════════ operator: yield ═════════════
 
     /// @notice Turn real surplus (tokens held beyond what users and the yield reserve
     ///         are owed) into yield reserve. Cannot exceed the surplus that exists.
@@ -244,17 +334,24 @@ contract RHChainVault is Ownable, ReentrancyGuard {
         return _tokens;
     }
 
-    /// @notice Tokens held beyond user principal (not deployed) and the yield reserve.
+    /// @notice Stock held beyond user principal (not rotated) and the yield reserve.
     function surplus(address token) public view returns (uint256) {
-        uint256 owedOut = (totalBalance[token] - deployed[token]) + yieldReserve[token];
+        uint256 owedOut = (totalBalance[token] - rotatedStock[token]) + yieldReserve[token];
         uint256 bal = IERC20(token).balanceOf(address(this));
         return bal > owedOut ? bal - owedOut : 0;
     }
 
-    /// @notice Current value, in the token, of what this vault holds in the strategy.
-    function strategyAssets(address token) external view returns (uint256) {
-        IERC4626 s = IERC4626(strategyOf[token]);
-        return s.convertToAssets(IERC20(address(s)).balanceOf(address(this)));
+    /// @notice Rotation state for one stock token. parkedAssets is the current USDG
+    ///         value of the shares parked in the USDG vault.
+    function rotation(address token)
+        external
+        view
+        returns (uint256 stockRotated, uint256 usdgIdleAmount, uint256 shares, uint256 parkedAssets)
+    {
+        stockRotated = rotatedStock[token];
+        usdgIdleAmount = usdgIdle[token];
+        shares = parkedShares[token];
+        parkedAssets = usdgVault.convertToAssets(shares);
     }
 
     /// @notice Everything a dashboard needs for one user, one row per allowed token.
