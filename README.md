@@ -8,6 +8,13 @@
 - Backend API: https://novasip-production.up.railway.app (try `/api/performance` for live Hyperliquid and Morpho rates)
 - Network: Hyperliquid testnet (HyperEVM) and Robinhood Chain testnet
 
+<p align="center">
+  <img width="32%" alt="NovaSIP landing" src="https://github.com/user-attachments/assets/67f5a2e6-f73c-46a1-99dd-9384009e1b46" />
+  <img width="32%" alt="NovaSIP app" src="https://github.com/user-attachments/assets/ffbbab76-f020-4de0-ae56-f6f1ff693070" />
+  <img width="32%" alt="NovaSIP portfolio" src="https://github.com/user-attachments/assets/a15a1da1-4f1f-441d-ab8c-526a6c2a9eee" />
+</p>
+
+
 ## The idea
 
 Crypto yield and stocks have lived in separate worlds. Two things changed:
@@ -18,6 +25,7 @@ Crypto yield and stocks have lived in separate worlds. Two things changed:
 Crypto and stocks move independently. NovaSIP puts both in one portfolio managed by an AI, so when one side is down the other can keep earning. The user never picks a strategy: they set a goal, a risk level and an amount.
 
 ## How it works
+<img width="1273" height="748" alt="image" src="https://github.com/user-attachments/assets/d2ae24ad-6028-408f-87b4-092ef083869b" />
 
 ```mermaid
 flowchart TB
@@ -106,28 +114,12 @@ Nova is a **Gemini** agent running in a TypeScript backend. It is not fine-tuned
 
 ## Revenue model
 
-1. **Hyperliquid builder codes (live, verified).** Every perp order the agent routes carries a 0.1% builder fee. Verified on testnet: a $250 order paid $0.25.
+1. **Hyperliquid builder codes (live, verified).** Every perp order the agent routes carries a 0.1% builder fee. On testnet, a $250 order paid $0.25. Across our test orders the builder address has accrued **$1.27 in claimable rewards**, shown on Hyperliquid's own Referrals page <img width="1471" height="700" alt="image" src="https://github.com/user-attachments/assets/f5fa4fd7-1efe-4601-a478-c04e4597b193" />
+
 2. **Early-exit fee (live in the contracts).** Leaving before the goal date charges a configurable fee, paid to the treasury.
 3. **Performance fee (planned).** A small fee on overall profit across both chains, including the stock-token strategy, charged only when users gain. Illustration: at $10M under management and an 8% return, a 10% performance fee is $80K a year.
 
 We earn when our users earn, and revenue grows with assets under management.
-
-## Roadmap
-
-- Automatic monthly deposits, which the user can pause or stop at any time (planned)
-- Mainnet launch with real Morpho vaults and real stock tokens
-- Per-user isolated accounting for stock rotation
-- Independent security audit
-- More stocks, more strategies, and goal templates
-
-## Honest scope of this build
-
-- Everything runs on **testnet**.
-- **Morpho** and the **stock swap** on Robinhood Chain testnet are contracts we deployed: the lending market uses live Morpho rates, and swaps execute at an operator-set price with a 0.1% fee. This price control is also what lets us trigger a buy-back in a demo.
-- Hyperliquid actions run from an **operator wallet** at demo size (carry 0.1 ETH, lending and HLP up to $5); user funds stay in the vaults.
-- Stock rotation is tracked per token in the vault and per user in the backend ledger, so withdrawals of a token are pooled across users until per-user isolation ships.
-- Directional trades are paper positions.
-- The vault contract keeps its on-chain name `NovaSIPVault`.
 
 ## Deployments
 
